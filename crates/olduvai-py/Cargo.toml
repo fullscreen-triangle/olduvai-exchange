@@ -13,3 +13,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 olduvai-core.workspace = true
 pyo3.workspace = true
+
+# Structured types cross the boundary in the same serde representation the HTTP API uses,
+# rather than being re-declared as `#[pyclass]` structs that must be kept in step by hand.
+serde.workspace = true
+serde_json.workspace = true

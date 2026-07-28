@@ -12,3 +12,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 olduvai-core.workspace = true
 wasm-bindgen.workspace = true
+
+# Structured types cross as JSON in the same serde representation the HTTP API uses, so the
+# TypeScript types are generated once rather than hand-maintained twice.
+serde.workspace = true
+serde_json.workspace = true
