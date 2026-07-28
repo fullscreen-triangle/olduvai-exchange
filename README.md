@@ -1,6 +1,12 @@
-# Olduvai Exchange
 
-An agricultural produce exchange built on intrinsic addressing.
+
+<p align="center">
+  <img src="assets/images/iStock_TZ_LandscapeOlduvaiGorge2.jpg" alt="Computational Cathedral" width="300"/>
+  <br>
+  <em>An agricultural produce exchange built on intrinsic addressing.</em>
+</p>
+
+
 
 Participants declare what they can do — capabilities, units, time windows. The system
 derives their position from those attributes and constructs an address. Matching is a walk
