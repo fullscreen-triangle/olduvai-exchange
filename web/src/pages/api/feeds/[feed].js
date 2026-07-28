@@ -1,4 +1,4 @@
-import { methodNotAllowed, fail, notImplemented } from "../_upstream";
+import { methodNotAllowed, fail, notImplemented } from "@/lib/api/upstream";
 
 /**
  * External context feeds: weather, traffic, prices, advisories.

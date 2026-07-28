@@ -17,6 +17,11 @@ const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-mont" });
 export default function App({ Component, pageProps }) {
   const router = useRouter();
 
+  // The dashboard carries its own navigation — the two edge rails. Mounting the overlay
+  // navbar there too would put a third trigger on the same screen, and its top-left button
+  // would sit directly over the left rail's tab.
+  const isDashboard = router.pathname.startsWith("/dashboard");
+
   return (
     <>
       <Head>
@@ -27,7 +32,7 @@ export default function App({ Component, pageProps }) {
       <main
         className={`${montserrat.variable} min-h-screen w-full bg-dark font-mont text-light`}
       >
-        <Navbar />
+        {!isDashboard && <Navbar />}
         <AnimatePresence initial={false} mode="wait">
           <Component key={router.asPath} {...pageProps} />
         </AnimatePresence>

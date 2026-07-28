@@ -1,5 +1,5 @@
-import { authHeaders } from "./_session";
-import { fail, forward, methodNotAllowed, notImplemented } from "./_upstream";
+import { authHeaders } from "@/lib/api/session";
+import { fail, forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
 
 /**
  * `POST /v1/query` — the composer's destination.

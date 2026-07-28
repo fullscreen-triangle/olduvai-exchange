@@ -4,7 +4,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const LINKS = [
-  { href: "/home", label: "Composer" },
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/signin", label: "Sign in" },
   { href: "/signup", label: "Sign up" },
 ];

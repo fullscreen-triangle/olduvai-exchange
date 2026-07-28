@@ -1,5 +1,5 @@
-import { authHeaders, requireSession } from "../_session";
-import { fail, forward, methodNotAllowed, notImplemented } from "../_upstream";
+import { authHeaders, requireSession } from "@/lib/api/session";
+import { fail, forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
 
 /**
  * Process views: transport, payments, monitoring, knowledge graph.

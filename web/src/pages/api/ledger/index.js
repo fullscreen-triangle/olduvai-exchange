@@ -1,5 +1,5 @@
-import { authHeaders, requireSession } from "../_session";
-import { forward, methodNotAllowed, notImplemented } from "../_upstream";
+import { authHeaders, requireSession } from "@/lib/api/session";
+import { forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
 
 /**
  * The append-only, hash-chained assembly record.

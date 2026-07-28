@@ -2,6 +2,7 @@ import AuthLayout, { Field, SubmitButton } from "@/components/AuthLayout";
 import TransitionEffect from "@/components/TransitionEffect";
 import Head from "next/head";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { useState } from "react";
 
 /**
@@ -14,6 +15,7 @@ import { useState } from "react";
  */
 export default function SignIn() {
   const [status, setStatus] = useState(null);
+  const router = useRouter();
 
   const submit = (e) => {
     e.preventDefault();
@@ -74,6 +76,18 @@ export default function SignIn() {
               user row, and that boundary is not built — so there is no server to
               authenticate <span className="text-light/90">{status}</span> against.
             </p>
+
+            {/* ⚠️ An explicit, labelled way through rather than an automatic redirect.
+                Silently landing someone on the dashboard would look like the sign-in
+                succeeded; the dashboard is reachable because nothing guards it yet, and
+                that is a fact worth stating rather than papering over. */}
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard")}
+              className="mt-4 rounded-lg border border-border px-3 py-2 text-xs text-light transition-colors hover:bg-surfaceHover"
+            >
+              Continue to the dashboard unauthenticated
+            </button>
           </div>
         )}
       </AuthLayout>

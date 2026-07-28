@@ -1,4 +1,4 @@
-import { methodNotAllowed, proxy } from "./_upstream";
+import { methodNotAllowed, proxy } from "@/lib/api/upstream";
 
 /**
  * The only route here with a real engine behind it.
