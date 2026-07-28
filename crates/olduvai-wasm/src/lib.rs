@@ -8,7 +8,7 @@
 //!
 //! Client-side encoding is a *display* convenience. The address of record is the one the
 //! server computed and wrote to the ledger; a client is never trusted to submit one.
-
+//!
 //! # The agent surface, and what is missing from it
 //!
 //! The client can compute χ, check a declared self against its floor, and water-fill a

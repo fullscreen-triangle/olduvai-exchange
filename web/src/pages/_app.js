@@ -1,15 +1,19 @@
-import Footer from "@/components/Footer";
 import Navbar from "@/components/Navbar";
 import "@/styles/globals.css";
 import { AnimatePresence } from "framer-motion";
-// pages/_app.js
 import { Montserrat } from "next/font/google";
 import Head from "next/head";
 import { useRouter } from "next/router";
 
-// If loading a variable font, you don't need to specify the font weight
 const montserrat = Montserrat({ subsets: ["latin"], variable: "--font-mont" });
 
+/**
+ * There is no `<Footer />` and no theme provider.
+ *
+ * The footer was the template's; a landing page described as minimal does not carry one.
+ * The theme provider is gone because the site has exactly one theme — see `_document.js`
+ * for why removing the switcher outright is safer than leaving it pinned to dark.
+ */
 export default function App({ Component, pageProps }) {
   const router = useRouter();
 
@@ -17,16 +21,16 @@ export default function App({ Component, pageProps }) {
     <>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" href="/final_favicon_48.png" />
+        <title>Olduvai Exchange</title>
       </Head>
       <main
-        className={`${montserrat.variable} font-mont  bg-light dark:bg-dark w-full min-h-screen h-full`}
+        className={`${montserrat.variable} min-h-screen w-full bg-dark font-mont text-light`}
       >
         <Navbar />
         <AnimatePresence initial={false} mode="wait">
           <Component key={router.asPath} {...pageProps} />
         </AnimatePresence>
-        <Footer />
       </main>
     </>
   );

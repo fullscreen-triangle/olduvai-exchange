@@ -2,74 +2,58 @@
 const { fontFamily } = require("tailwindcss/defaultTheme");
 
 module.exports = {
-  content: [
-    "./app/**/*.{js,ts,jsx,tsx}",
-    "./pages/**/*.{js,ts,jsx,tsx}",
-    "./components/**/*.{js,ts,jsx,tsx}",
-    // Or if using `src` directory:
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  darkMode: "class",
+  content: ["./src/**/*.{js,ts,jsx,tsx}"],
+
+  // ⭐ Not "class", and not "media" — the `dark:` variant is switched off entirely.
+  //
+  // The site has one theme. If the variant still existed, `dark:` classes would be
+  // authorable and would silently never match, which is the worst of the options: styles
+  // that look intentional in the source and do nothing in the browser. Disabling it makes
+  // any leftover `dark:` an unknown-variant build error instead.
+  darkMode: [],
+
   theme: {
     extend: {
       fontFamily: {
         mont: ["var(--font-mont)", ...fontFamily.sans],
       },
       colors: {
-        dark: "#1b1b1b",
-        light: "#f5f5f5",
-        primary: "#B63E96", // 240,86,199 #F056C7
-        primaryDark: "#58E6D9", // 80,230,217
+        // A near-black rather than pure #000: on OLED, pure black against dim text makes
+        // the smearing on scroll much more visible, and it leaves no room for a surface
+        // that reads as *behind* the page.
+        dark: "#0a0a0b",
+        surface: "#141416",
+        surfaceHover: "#1c1c20",
+        border: "#26262b",
+        light: "#ececee",
+        muted: "#8a8a94",
+        primary: "#c2703f",
+        primaryDark: "#e0accd",
       },
       animation: {
         "spin-slow": "spin 8s linear infinite",
+        "fade-in": "fadeIn 0.5s ease-out both",
       },
-      backgroundImage: {
-        circularLight:
-          "repeating-radial-gradient(rgba(0,0,0,0.4) 2px,#f5f5f5 5px,#f5f5f5 100px)",
-        circularDark:
-          "repeating-radial-gradient(rgba(255,255,255,0.5) 2px,#1b1b1b 8px,#1b1b1b 100px)",
-        circularLightLg:
-          "repeating-radial-gradient(rgba(0,0,0,0.4) 2px,#f5f5f5 5px,#f5f5f5 80px)",
-
-        circularDarkLg:
-          "repeating-radial-gradient(rgba(255,255,255,0.5) 2px,#1b1b1b 8px,#1b1b1b 80px)",
-        circularLightMd:
-          "repeating-radial-gradient(rgba(0,0,0,0.4) 2px,#f5f5f5 5px,#f5f5f5 60px)",
-
-        circularDarkMd:
-          "repeating-radial-gradient(rgba(255,255,255,0.5) 2px,#1b1b1b 8px,#1b1b1b 60px)",
-
-        circularLightSm:
-          "repeating-radial-gradient(rgba(0,0,0,0.4) 2px,#f5f5f5 5px,#f5f5f5 40px)",
-
-        circularDarkSm:
-          "repeating-radial-gradient(rgba(255,255,255,0.5) 2px,#1b1b1b 8px,#1b1b1b 40px)",
-      },
-      boxShadow: {
-        "3xl": "0 15px 15px 1px rgba(80,230,217, 0.4)",
+      keyframes: {
+        fadeIn: {
+          from: { opacity: 0, transform: "translateY(6px)" },
+          to: { opacity: 1, transform: "none" },
+        },
       },
     },
+
+    // The template inverted every breakpoint to `max-width`, which silently reverses what
+    // `md:` means and traps anyone writing a new component against Tailwind's own docs.
+    // Restored to the standard mobile-first direction.
     screens: {
-      "2xl": { max: "1535px" },
-      // => @media (max-width: 1535px) { ... }
-
-      xl: { max: "1279px" },
-      // => @media (max-width: 1279px) { ... }
-
-      lg: { max: "1023px" },
-      // => @media (max-width: 1023px) { ... }
-
-      md: { max: "767px" },
-      // => @media (max-width: 767px) { ... }
-
-      sm: { max: "639px" },
-      // => @media (max-width: 639px) { ... }
-
-      xs: { max: "479px" },
-      // => @media (max-width: 479px) { ... }
+      sm: "640px",
+      md: "768px",
+      lg: "1024px",
+      xl: "1280px",
+      "2xl": "1536px",
     },
   },
+
   plugins: [
     function ({ addVariant }) {
       addVariant("child", "& > *");

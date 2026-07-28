@@ -380,14 +380,10 @@ mod tests {
 
     #[test]
     fn corrections_are_the_training_signal() {
-        let r = ResolvedProposal::new(
-            proposal(18.4),
-            Confirmation::corrected("farmer:1042", 17.9),
-        );
+        let r = ResolvedProposal::new(proposal(18.4), Confirmation::corrected("farmer:1042", 17.9));
         assert!((r.error().unwrap() - 0.5).abs() < 1e-9, "read 0.5t high");
 
-        let accepted =
-            ResolvedProposal::new(proposal(18.4), Confirmation::accepted("farmer:1042"));
+        let accepted = ResolvedProposal::new(proposal(18.4), Confirmation::accepted("farmer:1042"));
         assert_eq!(accepted.error(), None);
     }
 
@@ -426,10 +422,7 @@ mod tests {
 
     #[test]
     fn the_wire_shape_carries_who_confirmed_and_what_proposed() {
-        let r = ResolvedProposal::new(
-            proposal(18.4),
-            Confirmation::corrected("farmer:1042", 17.9),
-        );
+        let r = ResolvedProposal::new(proposal(18.4), Confirmation::corrected("farmer:1042", 17.9));
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains(r#""by":"farmer:1042""#));
         assert!(json.contains(r#""outcome":"corrected""#));

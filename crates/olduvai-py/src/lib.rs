@@ -9,7 +9,7 @@
 //! about a NumPy reimplementation that agrees with it today. Never reimplement `encode` in
 //! Python, however convenient it looks — the whole point of the Rust core is that exactly
 //! one encoder exists.
-
+//!
 //! # Why the agent surface crosses as JSON
 //!
 //! [`Self_`], [`AgentCheck`], [`Cycle`] and [`Proposal`] already have a serde
@@ -114,7 +114,8 @@ fn agent_check(name: &str, regime: &str, self_json: &str, floor: f64) -> PyResul
         }
     };
     let s: Self_ = from_json(self_json)?;
-    let c = agent::check(name, regime, &s, floor).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let c =
+        agent::check(name, regime, &s, floor).map_err(|e| PyValueError::new_err(e.to_string()))?;
     to_json(&c)
 }
 
@@ -195,4 +196,109 @@ fn olduvai(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(unknown_precision_beta, m)?)?;
     m.add_function(wrap_pyfunction!(drift_report, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These exercise the JSON boundary rather than the maths — `olduvai-core` already tests
+    // the maths. What is untested elsewhere, and what silently breaks a harness, is a shape
+    // that serialises but does not deserialise back, or a field name the Python side is
+    // expected to read that the serde attributes renamed away.
+
+    fn two_part_self() -> Self_ {
+        Self_::new(["seed", "haul"]).separated("seed", "haul", 3.0)
+    }
+
+    #[test]
+    fn a_declared_self_round_trips_through_the_json_boundary() {
+        let json = serde_json::to_string(&two_part_self()).unwrap();
+        let (chi, partition_json) = character_invariant(&json).unwrap();
+        assert_eq!(chi, 3.0, "the only cut is the declared one");
+        // The partition must arrive as something Python can index, not as an opaque blob.
+        let p: serde_json::Value = serde_json::from_str(&partition_json).unwrap();
+        assert!(p["blocks"].is_array());
+        // The cheapest cut, not the number of cuts considered: with one separation there is
+        // one place to split and it costs what that separation costs.
+        assert_eq!(realised_floor(&json).unwrap(), 3.0);
+        assert!(
+            realised_floor(&serde_json::to_string(&Self_::new(["only"])).unwrap())
+                .unwrap()
+                .is_infinite(),
+            "an indivisible self has no cut, so any floor check passes vacuously"
+        );
+    }
+
+    #[test]
+    fn an_agent_check_carries_the_partition_and_the_verdict() {
+        let json = serde_json::to_string(&two_part_self()).unwrap();
+        let out = agent_check("grower:7", "character", &json, 2.0).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["name"], "grower:7");
+        assert_eq!(v["regime"], "character");
+        assert_eq!(v["chi"], 3.0);
+        assert!(v["chi_partition"].is_array());
+    }
+
+    #[test]
+    fn an_unknown_regime_is_refused_rather_than_defaulted() {
+        // ⚠️ Defaulting to `character` here would silently answer a different question than
+        // the caller asked, which is worse than an error in a calibration harness.
+        let s = serde_json::to_string(&Self_::new(["a"])).unwrap();
+        assert!(agent_check("x", "charcter", &s, 1.0).is_err());
+    }
+
+    #[test]
+    fn too_many_parts_is_an_error_at_the_boundary_not_an_approximation() {
+        let parts: Vec<String> = (0..olduvai_core::agent::MAX_PARTS + 1)
+            .map(|i| format!("p{i}"))
+            .collect();
+        let json = serde_json::to_string(&Self_::new(parts)).unwrap();
+        assert!(character_invariant(&json).is_err());
+    }
+
+    #[test]
+    fn water_fill_reports_which_scenes_were_omitted() {
+        // The scene with a negligible gain slope never clears the price, so it is a question
+        // not worth asking — and the harness must be able to see that, not infer it from a
+        // zero allocation.
+        let out = water_fill(
+            vec![
+                ("price_outlook".into(), 8.0),
+                ("rain_next_10d".into(), 5.0),
+                ("soil_ph_history".into(), 1e-9),
+            ],
+            2.0,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v["price"].as_f64().unwrap() > 0.0);
+        assert!(v["total_gain"].as_f64().unwrap().is_finite());
+        let allocs = v["allocations"].as_array().unwrap();
+        assert_eq!(allocs.len(), 3, "every scene is reported, served or not");
+    }
+
+    #[test]
+    fn malformed_json_raises_rather_than_panicking() {
+        for bad in ["", "{}", "not json", r#"{"parts": 3}"#] {
+            assert!(character_invariant(bad).is_err(), "{bad:?} must raise");
+        }
+    }
+
+    #[test]
+    fn the_beta_the_harness_reads_is_the_one_the_core_uses() {
+        // If these ever diverge, calibration would be tuning a threshold nothing enforces.
+        assert_eq!(
+            unknown_precision_beta(),
+            olduvai_core::foreman::UNKNOWN_PRECISION_BETA
+        );
+    }
+
+    #[test]
+    fn drift_over_an_empty_array_is_a_report_not_an_error() {
+        let v: serde_json::Value = serde_json::from_str(&drift_report("[]").unwrap()).unwrap();
+        assert_eq!(v["total"], 0);
+        assert!(v["mean_signed_error"].is_null());
+    }
 }

@@ -382,11 +382,7 @@ fn accumulated_beta(cycle: &Cycle) -> f64 {
         .legs
         .iter()
         .map(|leg| {
-            let tolerance = leg
-                .implied
-                .precision
-                .0
-                .unwrap_or(UNKNOWN_PRECISION_BETA);
+            let tolerance = leg.implied.precision.0.unwrap_or(UNKNOWN_PRECISION_BETA);
             leg.implied.value.abs() * tolerance
         })
         .sum()
@@ -521,16 +517,16 @@ mod tests {
         ))
         .unwrap();
 
-        let dangling = Step::declared(Activity::Planted, Outcome::Commit, Phase::Construction)
-            .correcting(57);
+        let dangling =
+            Step::declared(Activity::Planted, Outcome::Commit, Phase::Construction).correcting(57);
         assert!(matches!(
             r.append(dangling),
             Err(RecordError::DanglingSupersession { tick: 57 })
         ));
 
         // Superseding the tick this step is about to occupy is also refused.
-        let selfref = Step::declared(Activity::Planted, Outcome::Commit, Phase::Construction)
-            .correcting(1);
+        let selfref =
+            Step::declared(Activity::Planted, Outcome::Commit, Phase::Construction).correcting(1);
         assert!(matches!(
             r.append(selfref),
             Err(RecordError::NonMonotoneSupersession { .. })
@@ -642,7 +638,11 @@ mod tests {
             ],
         );
         let r = check_cycle(&c);
-        assert!(r.beta > 3.0, "β should exceed the 3t discrepancy, got {}", r.beta);
+        assert!(
+            r.beta > 3.0,
+            "β should exceed the 3t discrepancy, got {}",
+            r.beta
+        );
         assert_eq!(r.closure, Closure::SubFloor);
     }
 

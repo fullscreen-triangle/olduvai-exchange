@@ -59,11 +59,7 @@ pub enum AgentError {
     /// A separation cost that is negative or not finite. Minimum-cut over such weights is
     /// not well defined.
     #[error("separation {from:?}–{to:?} has non-finite or negative cost {cost}")]
-    BadCost {
-        from: String,
-        to: String,
-        cost: f64,
-    },
+    BadCost { from: String, to: String, cost: f64 },
 }
 
 /// An undirected weighted separation between two declared parts.
@@ -96,12 +92,7 @@ impl Self_ {
     }
 
     /// Add a separation. Chainable.
-    pub fn separated(
-        mut self,
-        from: impl Into<String>,
-        to: impl Into<String>,
-        cost: f64,
-    ) -> Self {
+    pub fn separated(mut self, from: impl Into<String>, to: impl Into<String>, cost: f64) -> Self {
         self.separations.push(Separation {
             from: from.into(),
             to: to.into(),
@@ -755,7 +746,10 @@ mod tests {
     #[test]
     fn questions_below_the_price_are_not_asked() {
         // ⭐ The "sufficient" test. A tiny budget cannot afford the weak question.
-        let scenes = vec![Scene::new("worth_asking", 10.0), Scene::new("marginal", 0.2)];
+        let scenes = vec![
+            Scene::new("worth_asking", 10.0),
+            Scene::new("marginal", 0.2),
+        ];
         let r = water_fill(&scenes, 0.05);
         assert!(r.price > 0.2, "price should exceed the weak scene's margin");
         let omitted: Vec<&str> = r.omitted().collect();

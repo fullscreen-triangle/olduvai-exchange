@@ -1,3 +1,82 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * The site is permanently dark. These are the places a theme has to be asserted outside
+ * Tailwind's utility classes — the document canvas, form-control chrome, scrollbars and
+ * selection — because they paint before or outside React's tree.
+ */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    @apply bg-dark text-light;
+    /* Painted on the root element so the browser has a dark canvas before first paint and
+       during overscroll, rather than a white flash at the edges. */
+    background-color: #0a0a0b;
+  }
+
+  body {
+    @apply antialiased;
+  }
+
+  ::selection {
+    @apply bg-primary/30 text-light;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-color: #26262b transparent;
+    scrollbar-width: thin;
+  }
+
+  /* WebKit */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full border-4 border-solid border-transparent bg-clip-padding;
+    background-color: #26262b;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #3a3a42;
+  }
+
+  /* Chrome's autofill overlay is a hardcoded pale yellow that ignores background-color.
+     The inset shadow trick is the only way to cover it without disabling autofill. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #ececee;
+    -webkit-box-shadow: 0 0 0 1000px #141416 inset;
+    caret-color: #ececee;
+    transition: background-color 9999s ease-in-out 0s;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary/70 ring-offset-2;
+    --tw-ring-offset-color: #0a0a0b;
+  }
+}
+
+@layer utilities {
+  /* Respect a stated preference for reduced motion. The landing page is an animated
+     model and a fade-in; neither should override someone's accessibility setting. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
