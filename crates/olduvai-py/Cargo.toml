@@ -1,0 +1,15 @@
+[package]
+name = "olduvai-py"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "PyO3 bindings to olduvai-core, for the calibration and cohesion-test harness."
+
+[lib]
+name = "olduvai"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+olduvai-core.workspace = true
+pyo3.workspace = true

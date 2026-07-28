@@ -1,0 +1,14 @@
+[package]
+name = "olduvai-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WASM bindings to olduvai-core, for the web client."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+olduvai-core.workspace = true
+wasm-bindgen.workspace = true

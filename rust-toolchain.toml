@@ -1,0 +1,8 @@
+# Pinned so that every contributor, CI runner and release build compiles the encoder with
+# the same compiler. Determinism is the reason the core is in Rust at all
+# (notes/30-programming-structure.md §1); a floating-point codegen difference between
+# toolchains would produce divergent addresses with no error anywhere.
+[toolchain]
+channel = "1.85"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

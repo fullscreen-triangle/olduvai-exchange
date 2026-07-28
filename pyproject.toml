@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "olduvai"
+version = "0.1.0"
+description = "Analysis harness for Olduvai Exchange: coordinate design, calibration, cohesion tests."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# ⚠️ These are analysis-side only. Nothing here is in the address path — the encoder is in
+# Rust and is reached through the bindings, never reimplemented in Python
+# (notes/30-programming-structure.md §1).
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.maturin]
+manifest-path = "crates/olduvai-py/Cargo.toml"
+module-name = "olduvai"
+features = ["pyo3/extension-module"]
+python-source = "analysis"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["analysis/tests"]
