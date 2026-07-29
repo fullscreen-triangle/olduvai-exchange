@@ -1,3 +1,4 @@
+import Assistant from "@/components/Assistant";
 import DashboardLayout from "@/components/DashboardLayout";
 import { GATES, findEntry } from "@/lib/navigation";
 import { useRouter } from "next/router";
@@ -64,7 +65,10 @@ export default function RailPage({ children }) {
 
   return (
     <DashboardLayout title={entry.label}>
-      <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center px-8 py-24">
+      {/* Top-aligned rather than vertically centred: with the agent mounted below, the page
+          is now taller than the viewport, and centring content that overflows pushes the
+          heading off the top of the screen. */}
+      <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-8 pb-24 pt-32">
         <div className="animate-fade-in">
           <h1 className="text-2xl font-normal tracking-tight text-light">
             {entry.label}
@@ -115,6 +119,24 @@ export default function RailPage({ children }) {
             )}
 
             {state.status === "ready" && children?.(state.data)}
+          </div>
+
+          {/* ⭐ The agent instance for this page — `notes/31` item 1: every linked page in
+              the sidebars is an instance of the home page model. It is the same component
+              and the same pipeline as the centre composer; the only thing that differs is
+              the pathname it sends, which the server turns into a domain and a specialist.
+
+              ⚠️ It is here even though the page above it is blocked, and that is the point
+              rather than an oversight. The agent is told, from this same manifest entry,
+              which gate it is behind — so asked about this page's data it says what is
+              missing and why, instead of inventing a forecast. An assistant that is only
+              mounted once real data arrives would never be tested against the case that
+              matters most. */}
+          <div className="mt-12 border-t border-border/60 pt-8">
+            <h2 className="mb-4 text-[11px] uppercase tracking-widest text-muted/70">
+              Ask about {entry.label.toLowerCase()}
+            </h2>
+            <Assistant placeholder={`Ask about ${entry.label.toLowerCase()}`} />
           </div>
         </div>
       </div>

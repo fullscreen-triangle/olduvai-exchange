@@ -133,6 +133,19 @@ export const GATES = {
       "A process reading is only evidence if it is sealed at the source. An unsealed reading is an assertion by whoever entered it, and would carry no evidential weight.",
     reference: "notes/19-sealed-sensors.md",
   },
+  /**
+   * ⭐ The only gate here a participant can clear themselves.
+   *
+   * Every other gate in this table waits on a research result or an unbuilt service. This
+   * one waits on a process on their own machine, so its `detail` names the remedy rather
+   * than the reason — there is no point explaining the epistemics of a stopped daemon.
+   */
+  "no-model": {
+    title: "No local model running",
+    detail:
+      "The assistant's base model runs locally through Ollama, so that what you describe about your consignment stays on your machine. Ollama is not running, or has no model installed.",
+    reference: "notes/31-dashboard-design.md item 1",
+  },
   "no-provider": {
     title: "No provider configured",
     detail:

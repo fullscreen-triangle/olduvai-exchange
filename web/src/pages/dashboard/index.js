@@ -1,3 +1,4 @@
+import Assistant from "@/components/Assistant";
 import Composer from "@/components/Composer";
 import DashboardLayout from "@/components/DashboardLayout";
 import { GATES } from "@/lib/navigation";
@@ -10,6 +11,19 @@ import { useState } from "react";
  * endpoint the composer will always have used. It comes back blocked on the cohesion gate,
  * and that is the correct result rather than a stub: the request path is finished, and the
  * day the gate passes this page starts returning matches with no change here.
+ *
+ * # ⚠️ Two boxes, and the separation between them is the architecture
+ *
+ * The upper box submits **constraints to the matching engine**. The lower one **asks the
+ * assistant**. They look similar and they are not the same act, so they are not merged into
+ * one box with a mode toggle — a toggle would make it possible to ask the engine a question
+ * or to submit a consignment to a language model by mistake.
+ *
+ * `notes/28-matching-is-search.md`: *matching IS search — there is no second system*. The
+ * assistant is not a second matcher. It explains, and it drafts things the participant then
+ * confirms; it never returns a coalition and never orders participants. Keeping the two
+ * inputs visibly distinct is what stops that boundary from eroding in the interface even
+ * while it holds in the code.
  */
 export default function Dashboard() {
   const [result, setResult] = useState(null);
@@ -83,7 +97,21 @@ export default function Dashboard() {
             </div>
           )}
 
-          <p className="mt-8 text-center text-[11px] leading-relaxed text-muted/50">
+          {/* The assistant, below and visibly separate. The rule and the label are doing
+              real work: they mark where "submit this to the exchange" ends and "ask a
+              question about it" begins. */}
+          <div className="mt-14 border-t border-border/60 pt-10">
+            <h2 className="mb-4 text-center text-[11px] uppercase tracking-widest text-muted/70">
+              Or ask
+            </h2>
+            <Assistant placeholder="Ask about units, grades, seasons, or what a term means" />
+            <p className="mt-3 text-center text-[11px] leading-relaxed text-muted/50">
+              The assistant explains and drafts. It does not match, rank, or record —
+              anything it suggests is yours to confirm before it becomes an entry.
+            </p>
+          </div>
+
+          <p className="mt-10 text-center text-[11px] leading-relaxed text-muted/50">
             Context at the left edge, process at the right — hover, or press{" "}
             <kbd className="rounded border border-border px-1 py-0.5 font-sans">[</kbd>{" "}
             and{" "}
