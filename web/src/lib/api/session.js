@@ -14,7 +14,7 @@
  * — which is the whole reason it exists as a seam now rather than as an inline check later.
  */
 
-import { Reason, fail } from "./_upstream";
+import { Reason, fail } from "./upstream";
 
 export const SESSION_COOKIE = "olduvai_session";
 

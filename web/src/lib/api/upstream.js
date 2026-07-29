@@ -1,7 +1,13 @@
 /**
  * The one place this app talks to `olduvai-server`.
  *
- * # ⚠️ What a route in this folder may and may not do
+ * ⚠️ This lives in `lib/`, not in `pages/api/`, and that is load-bearing. The Pages Router
+ * makes **every** file under `pages/api` a public endpoint — a leading underscore is a
+ * convention with no effect there. As `pages/api/_upstream.js` this shipped as a reachable
+ * route that exported no handler, so hitting it returned a 500 instead of a 404. Helpers go
+ * in `lib/`; only files that are genuinely endpoints belong under `pages/api`.
+ *
+ * # ⚠️ What a route in `pages/api` may and may not do
  *
  * `notes/30-programming-structure.md` §4: *"The BFF holds session handling and response
  * shaping only. No admissibility logic ever."*
@@ -17,7 +23,7 @@
  *   - fail honestly.
  *
  * It may not encode, rank, synthesise, or decide what is admissible. If you find yourself
- * reaching for a threshold constant in this folder, it belongs in `olduvai-core`.
+ * reaching for a threshold constant in a route, it belongs in `olduvai-core`.
  *
  * # Why upstream failure is a first-class response, not a 500
  *
