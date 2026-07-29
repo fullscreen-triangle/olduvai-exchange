@@ -99,6 +99,13 @@ export default function RailPage({ children }) {
               </Panel>
             )}
 
+            {/* A blocked feed still knows its own units and provenance, and stating them is
+                not filler — `source: asserted` is the fact that this reading would never
+                carry evidential weight, whoever ends up providing it. */}
+            {state.status === "blocked" && state.body?.declaration && (
+              <Declaration declaration={state.body.declaration} />
+            )}
+
             {state.status === "blocked" && !gate && (
               <Panel label="Unavailable">
                 <p className="text-sm leading-relaxed text-muted">
@@ -112,6 +119,46 @@ export default function RailPage({ children }) {
         </div>
       </div>
     </DashboardLayout>
+  );
+}
+
+/**
+ * What a feed would carry, stated before it carries anything.
+ *
+ * ⭐ `source: asserted` is the load-bearing line. Note 27 §4 splits observed from asserted,
+ * and a third-party reading is always the latter — so a value from this feed can inform a
+ * person but can never become evidence in a coalition. Saying so on the empty page means
+ * whoever wires the provider later reads the constraint before they write the fetch.
+ */
+function Declaration({ declaration }) {
+  const units = Object.entries(declaration.units ?? {});
+
+  return (
+    <dl className="mt-4 divide-y divide-border/60 rounded-xl border border-border bg-surface/30 px-5 py-1 text-sm">
+      <Row term="Provenance">
+        <span className="text-light/90">{declaration.source}</span>
+        <span className="text-muted/60"> — context, not evidence</span>
+      </Row>
+      {units.length > 0 && (
+        <Row term="Units">
+          {units.map(([k, v]) => `${k} (${v})`).join(", ")}
+        </Row>
+      )}
+      <Row term="Readings">
+        {declaration.readings?.length
+          ? `${declaration.readings.length}`
+          : "none"}
+      </Row>
+    </dl>
+  );
+}
+
+function Row({ term, children }) {
+  return (
+    <div className="flex justify-between gap-6 py-2.5">
+      <dt className="text-muted/70">{term}</dt>
+      <dd className="text-right text-muted">{children}</dd>
+    </div>
   );
 }
 

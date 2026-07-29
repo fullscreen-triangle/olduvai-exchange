@@ -162,11 +162,15 @@ export async function proxy(req, res, path, { method = req.method } = {}) {
  * waiting on, so the UI can tell someone *why* a panel is empty rather than showing a
  * spinner that never resolves — and so nobody wires a placeholder in and forgets.
  */
-export function notImplemented(res, { blockedBy, note }) {
+export function notImplemented(res, { blockedBy, note, ...rest }) {
   return res.status(503).json({
     ok: false,
     reason: Reason.NOT_IMPLEMENTED,
     blockedBy,
     note,
+    // Anything else the caller attached — e.g. the feeds route's `declaration`, which
+    // carries the feed's real units and provenance so a blocked page can still state them.
+    // Spreading rather than naming it keeps this helper from knowing about any one route.
+    ...rest,
   });
 }
