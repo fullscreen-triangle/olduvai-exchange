@@ -28,8 +28,15 @@ const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
  */
 const MODEL = process.env.OLLAMA_MODEL ?? null;
 
-/** Generation is slower than a proxy hop. This is a bound on hanging, not on thinking. */
-const TIMEOUT_MS = 120_000;
+/**
+ * Generation is slower than a proxy hop. This is a bound on hanging, not on thinking.
+ *
+ * ⚠️ Generous on purpose. A first call against a cold model pays the load cost on top of
+ * generation, and on modest hardware a large model can spend a minute before emitting a
+ * token. A timeout tight enough to feel responsive would turn "your machine is slow" into
+ * "the assistant is broken", which is both wrong and unactionable.
+ */
+const TIMEOUT_MS = 180_000;
 /** The probe must be fast — it runs on page load to decide what to render. */
 const PROBE_TIMEOUT_MS = 1500;
 
@@ -101,7 +108,13 @@ export async function probe() {
  * `stream: false` because these responses are assembled by the pipeline before anything is
  * shown — a half-scored draft is not something to put in front of someone.
  */
-export async function generate({ model, system, prompt, temperature = 0.2 }) {
+export async function generate({
+  model,
+  system,
+  prompt,
+  temperature = 0.2,
+  maxTokens,
+}) {
   if (!model) {
     return { ok: false, reason: "no_model", detail: "No Ollama model is installed." };
   }
@@ -113,10 +126,19 @@ export async function generate({ model, system, prompt, temperature = 0.2 }) {
       prompt,
       system,
       stream: false,
-      // ⭐ Low by default. This pipeline explains and proposes; both are jobs where being
-      // interestingly wrong is worse than being dully right. four-sided-triangle raises
-      // temperature to diversify candidates — that stage is deliberately absent here.
-      options: { temperature },
+      // ⚠️ Hold the model in memory between stages. The pipeline makes several calls in
+      // quick succession, and Ollama's default unload would evict a multi-gigabyte model
+      // between them — paying the load cost repeatedly inside one answer.
+      keep_alive: "5m",
+      options: {
+        // ⭐ Low by default. This pipeline explains and proposes; both are jobs where being
+        // interestingly wrong is worse than being dully right. four-sided-triangle raises
+        // temperature to diversify candidates — that stage is deliberately absent here.
+        temperature,
+        // `num_predict` is Ollama's cap. Omitted rather than set to a sentinel when the
+        // caller does not ask, so the model's own default stands.
+        ...(maxTokens === undefined ? {} : { num_predict: maxTokens }),
+      },
     },
   });
 

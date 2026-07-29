@@ -127,9 +127,14 @@ export function systemPrompt(agent) {
     "What you do instead:",
     "",
     "- Explain, in plain language, what something means and what it depends on.",
-    "- Read what the participant gives you and PROPOSE values for their entry. A proposal is",
-    "  not a record: they confirm it, and it is then attributed to them as their own",
-    "  assertion, carrying no evidential weight beyond that.",
+    // ⚠️ "from what they have told you" is load-bearing. Without it a live run read
+    // "propose values" as licence to invent a grading scheme and offer it as a suggestion.
+    // A proposal here is a *reading* of the participant's own words — the delivery note they
+    // pasted, the tonnage they typed — never a value the model supplied from its own store.
+    "- Read what the participant gives you and propose values for their entry FROM WHAT THEY",
+    "  HAVE TOLD YOU. A proposal is a reading of their words, not a value you supply: they",
+    "  confirm it, and it is then attributed to them as their own assertion, carrying no",
+    "  evidential weight beyond that. Never propose a value they did not give you.",
     "- Say when you do not know. The engine behind most of this exchange is gated on an",
     "  unrun experiment, and saying so is a correct answer.",
     "",

@@ -31,6 +31,28 @@ import * as ollama from "./ollama";
 const MAX_REFINEMENTS = 1;
 
 /**
+ * ⭐ Output cap per stage — the latency lever that actually worked.
+ *
+ * Measured on llama3.2:3b, an uncapped run took 239s across five stages. Three of those
+ * stages write for another stage rather than for a person, and uncapped they produced
+ * several hundred tokens each that nobody would ever read.
+ *
+ * `compose` is deliberately absent: it is the only stage whose output a person sees, and
+ * truncating an answer mid-sentence to save a few seconds would be a bad trade. It runs on
+ * the model's own default.
+ */
+const TOKEN_CAP = {
+  /** Intent, quantities, and whether the engine is needed. Notes, not prose. */
+  understand: 200,
+  /** A list of what is known and unknown. */
+  ground: 200,
+  /** One `axis: pass|fail` line per axis. Anything more is the model explaining to nobody. */
+  check: 60,
+  /** A rewrite of `compose`'s draft, so it is bounded by roughly the same size. */
+  refine: 500,
+};
+
+/**
  * Working memory for a single query.
  *
  * ⭐ Kept from four-sided-triangle, and kept *narrow*: it lives for one request and is
@@ -90,6 +112,24 @@ export async function run({ query, agent, base }) {
   const system = systemPrompt(agent);
   const specialist = hf.resolve(agent.domain);
 
+  /**
+   * ⚠️ **Sequential, and not for want of trying.**
+   *
+   * `understand`, `ground`, and `specialise` all read only the participant's message, so on
+   * paper they are independent and should run at once. Measured, that made things worse:
+   * both concurrent calls hit the 120s timeout and the whole request failed, where the
+   * sequential version had completed in 239s.
+   *
+   * The reason is that Ollama serialises requests against a single loaded model. Issuing two
+   * concurrently does not halve the latency — it queues the second behind the first while
+   * *both* clocks run, so the wall time is unchanged and each individual call now appears to
+   * take twice as long. Every request-level timeout then fires at once.
+   *
+   * ⭐ So the latency budget is spent on token caps instead, which is where it actually
+   * was: `understand` and `ground` write notes for `compose` to read, not prose for a
+   * person, and uncapped they were producing several hundred tokens each that nobody sees.
+   * Concurrency would be the right tool against a server that batches. This one does not.
+   */
   for (const s of STAGES) {
     const t0 = Date.now();
 
@@ -118,7 +158,9 @@ export async function run({ query, agent, base }) {
         ms: Date.now() - t0,
         ok: r.ok,
         degraded: !r.ok,
-        detail: r.ok ? null : `Specialist unreachable (${r.reason}); the base model answered alone.`,
+        detail: r.ok
+          ? null
+          : `Specialist unreachable (${r.reason}); the base model answered alone.`,
       });
       if (r.ok) mem.specialist = r.text;
       continue;
@@ -130,6 +172,7 @@ export async function run({ query, agent, base }) {
       prompt: prompts[s.id](mem),
       // `check` scores rather than writes; determinism matters more there than anywhere.
       temperature: s.id === "check" ? 0 : 0.2,
+      maxTokens: TOKEN_CAP[s.id],
     });
 
     record(mem, s.id, {
@@ -167,6 +210,7 @@ export async function run({ query, agent, base }) {
       system,
       prompt: prompts.refine(mem),
       temperature: 0.1,
+      maxTokens: TOKEN_CAP.refine,
     });
     record(mem, "refine", {
       tier: Tier.BASE,
@@ -176,7 +220,7 @@ export async function run({ query, agent, base }) {
       degraded: false,
       detail: `Refined once: ${mem.checkFailed.join(", ")}.`,
     });
-    if (r.ok) mem.draft = r.text;
+    if (r.ok) mem.draft = stripPreamble(r.text);
   }
 
   return {
@@ -196,6 +240,28 @@ export async function run({ query, agent, base }) {
       checks: mem.checkFailed ?? null,
     },
   };
+}
+
+/**
+ * Drop a leading line in which the model announces what it is about to do.
+ *
+ * ⚠️ Belt and braces alongside the instruction in `prompts.refine`. A live run opened with
+ * *"Here's a rewritten version of the draft:"* — the participant never saw a draft and does
+ * not know a checker ran, so that sentence is pipeline scaffolding showing through the
+ * product. Prompting alone does not reliably suppress it; a small deterministic strip does.
+ *
+ * Kept deliberately narrow: it only fires on a *first* line that both ends in a colon and
+ * matches a known announcement, so an answer that legitimately begins with a short
+ * colon-terminated heading survives.
+ */
+function stripPreamble(text) {
+  const trimmed = text.trim();
+  const [first, ...rest] = trimmed.split("\n");
+
+  const announces =
+    /^(here('s| is)|below is|this is)\b.*\b(rewrit|revis|updat|correct|version|draft)\b.*:$/i;
+
+  return announces.test(first.trim()) ? rest.join("\n").trim() : trimmed;
 }
 
 /** Fold a stage's output into working memory. */
@@ -269,6 +335,14 @@ const prompts = {
       "",
       "Be direct and brief. Units on every quantity. Where the answer depends on records",
       "you do not have, say so plainly rather than hedging the whole answer.",
+      "",
+      // ⚠️ Added after a live run produced a bulleted "Grade A / B / C" scheme this exchange
+      // has never defined, wrapped in a disclaimer. The disclaimer is the part a reader
+      // drops; the list is the part they keep. Stopping is a better answer than illustrating.
+      "⚠️ Do not illustrate with made-up examples. If you do not know this exchange's grades,",
+      "categories, thresholds, or codes, say that they are defined by the exchange and stop —",
+      "do not invent a plausible set to show what one might look like, even labelled as an",
+      "example. An invented list is remembered after the caveat around it is forgotten.",
     ].join("\n"),
 
   check: (m) =>
@@ -289,6 +363,12 @@ const prompts = {
       "",
       "Rewrite it so it passes. Do not pad it, and do not add claims to compensate —",
       "if the fix is to say less, say less.",
+      "",
+      // ⚠️ Added after a live run began its answer with "Here's a rewritten version of the
+      // draft:". The participant never saw a draft and does not know a check ran; a stage
+      // narrating its own place in the pipeline is scaffolding that leaked into the product.
+      "Reply with the rewritten answer and nothing else. No preamble, and no reference to",
+      "this being a rewrite — the person reading it never saw the earlier version.",
       "",
       "Draft:",
       m.draft ?? "",

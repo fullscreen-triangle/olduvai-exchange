@@ -170,9 +170,18 @@ export const CHECKS = {
      * ⭐ The exclusions, as an output test. An answer that ranks participants, asserts an
      * address, or presents a computed entry value as final has crossed a line the code
      * cannot see — so it is checked for here.
+     *
+     * ⚠️ The "invented specifics" clause was added after a live run. Asked what grade means,
+     * llama3.2 produced a hedged paragraph containing a bulleted list of "Grade A / Grade B /
+     * Grade C" with moisture bands — and this check passed it, because the answer ranked
+     * nobody and asserted no address. But the exchange has no such grades. A reader skims the
+     * list and keeps the categories; the hedge around it does not survive being skimmed.
+     *
+     * Fabricated *structure* is more durable than a fabricated sentence, so it is named
+     * explicitly rather than left to be inferred from "no value presented as recorded".
      */
     detail:
-      "No ranking of participants, no asserted address, no value presented as though it were recorded.",
+      "No ranking of participants, no asserted address, no value presented as though it were recorded, and no invented grades, categories, thresholds, or codes — naming a scheme this exchange has not defined is a failure even when hedged.",
   },
   answerable: {
     label: "Answerable",
