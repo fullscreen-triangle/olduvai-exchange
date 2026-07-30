@@ -20,6 +20,11 @@
 //! - [`agent`] — separation floors, the character invariant χ, water-filled attention.
 //! - [`foreman`] — the append-only activity record and its coherence check.
 //! - [`proposal`] — ⭐ the *only* surface through which a model may write.
+//! - [`orbit`] — SGP4 propagation. ⭐ A satellite position is a computation, not a lookup:
+//!   the TLE and the timestamp go in the ledger, so anyone can recompute the answer.
+//! - [`footprint`] — how much ground a reading covers, and whether that is fine enough to
+//!   be *about* a given place. A reading carries its footprint the way a value carries its
+//!   unit.
 //!
 //! # Where AI is, and is not
 //!
@@ -43,6 +48,15 @@
 //! deterministic despite being the "agent" layer — χ is a graph invariant, attention is
 //! bisection on a Lagrange multiplier. That is what lets an agent live inside the core.
 //!
+//! ⭐ [`orbit`] is the same argument reached from the other side, and is worth stating
+//! because a "satellite" module is exactly where a model would otherwise be reached for.
+//! A third party's soil-moisture *retrieval* is [`Source::Asserted`] — we take it on faith.
+//! A position propagated from a published TLE is [`Source::Instrument`], because the TLE and
+//! the timestamp are in the ledger and the arithmetic is published, so anyone can redo it
+//! and get our bytes. **Public feed in, our computation out.** That is the only route by
+//! which the satellite rail produces evidence rather than context, and it is a route a
+//! learned propagator would close.
+//!
 //! # Build order
 //!
 //! `notes/30-programming-structure.md` §7 makes the cohesion test a real gate. Steps 4–6
@@ -51,6 +65,12 @@
 //!
 //! [`agent`], [`foreman`] and [`proposal`] do not jump that gate: none of them depends on
 //! a coordinate function, so they are step-1 work that happens to have been reached late.
+//!
+//! [`orbit`] and [`footprint`] qualify on the same grounds. Neither takes a coordinate
+//! function or produces one. ⚠️ [`footprint`] in particular is the *guard* on that path
+//! rather than a user of it: [`footprint::Reading::is_distinguishing_for`] is what stops a
+//! reading too coarse to separate two participants from ever reaching an address, which is a
+//! thing to have in place *before* the coordinate functions exist rather than after.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
@@ -58,7 +78,9 @@
 pub mod address;
 pub mod agent;
 pub mod coords;
+pub mod footprint;
 pub mod foreman;
+pub mod orbit;
 pub mod proposal;
 pub mod provenance;
 pub mod trie;
@@ -70,11 +92,16 @@ pub use agent::{
     Separation, WaterFill,
 };
 pub use coords::{Axis, CoordinateFn, Coordinates, Normalisers, OutOfRange};
+pub use footprint::{great_circle_km, Extent, Footprint, Reading, Resolution};
 // `Outcome` is deliberately *not* re-exported from either module: `foreman::Outcome`
 // (commit/observe/decline) and `proposal::Outcome` (accepted/corrected/rejected) are
 // different things, and a single bare `Outcome` at the crate root would make call sites
 // ambiguous to a reader even where the compiler could resolve them.
 pub use foreman::{check_cycle, Activity, Closure, Coherence, Cycle, Leg, Phase, Record, Step};
+pub use orbit::{
+    look_angles, overpass_windows, propagate, Geodetic, Look, OrbitError, Overpass, Position, Tle,
+    Utc,
+};
 pub use proposal::{Confirmation, DriftReport, Proposal, Proposer, ResolvedProposal};
 pub use provenance::{Confidence, Field, Precision, Source};
 pub use trie::{Fallback, Trie};
