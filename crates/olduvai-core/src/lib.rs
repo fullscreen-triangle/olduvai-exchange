@@ -25,6 +25,9 @@
 //! - [`footprint`] — how much ground a reading covers, and whether that is fine enough to
 //!   be *about* a given place. A reading carries its footprint the way a value carries its
 //!   unit.
+//! - [`fusion`] — ⭐ many weak position observations combined into one estimate that knows
+//!   how good it is. Not verification: no source here is trusted enough to check another
+//!   against, so the operation is combination weighted by admitted noise.
 //!
 //! # Where AI is, and is not
 //!
@@ -71,6 +74,19 @@
 //! rather than a user of it: [`footprint::Reading::is_distinguishing_for`] is what stops a
 //! reading too coarse to separate two participants from ever reaching an address, which is a
 //! thing to have in place *before* the coordinate functions exist rather than after.
+//!
+//! ⚠️ **[`fusion`] does not qualify on those grounds, and needs its own argument.** A fused
+//! position is exactly the sort of quantity `S_k` would be derived from, so unlike the two
+//! above it genuinely sits on the coordinate path rather than beside it.
+//!
+//! It stays behind the gate by stopping short of the step that matters. The module produces a
+//! position and an uncertainty and offers **no** function mapping either to a coordinate, a
+//! [`Trit`], or an [`Address`] — the gate is on coordinate *functions*, not on the
+//! measurements they would one day consume. ⭐ The one bridge it exposes,
+//! [`fusion::Estimate::extent`], points away from the address path rather than towards it: it
+//! feeds [`footprint::Reading::is_distinguishing_for`], so a badly located participant makes
+//! readings *less* admissible. Building a guard's input before the thing being guarded is the
+//! right order; the check on this module is that the arrow keeps pointing that way.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
@@ -80,6 +96,7 @@ pub mod agent;
 pub mod coords;
 pub mod footprint;
 pub mod foreman;
+pub mod fusion;
 pub mod orbit;
 pub mod proposal;
 pub mod provenance;
@@ -100,6 +117,7 @@ pub use footprint::{great_circle_km, Extent, Footprint, Reading, Resolution};
 pub use foreman::{
     beta_declaration, check_cycle, Activity, Closure, Coherence, Cycle, Leg, Phase, Record, Step,
 };
+pub use fusion::{Estimate, Observation, MIN_SIGMA_M, UNINFORMED_SIGMA_M};
 pub use orbit::{
     look_angles, overpass_windows, propagate, Geodetic, Look, OrbitError, Overpass, Position, Tle,
     Utc,

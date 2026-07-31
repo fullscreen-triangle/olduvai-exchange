@@ -13,6 +13,11 @@
 use axum::{routing::get, Json, Router};
 use serde_json::json;
 
+/// ⭐ The running position filter. Storage and ordering only — every arithmetic step is a
+/// call into `olduvai_core::fusion`. See the module doc for why that is not a breach of the
+/// transport-only rule above.
+mod positions;
+
 async fn health() -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
