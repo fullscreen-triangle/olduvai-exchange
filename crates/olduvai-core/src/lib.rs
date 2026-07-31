@@ -97,7 +97,9 @@ pub use footprint::{great_circle_km, Extent, Footprint, Reading, Resolution};
 // (commit/observe/decline) and `proposal::Outcome` (accepted/corrected/rejected) are
 // different things, and a single bare `Outcome` at the crate root would make call sites
 // ambiguous to a reader even where the compiler could resolve them.
-pub use foreman::{check_cycle, Activity, Closure, Coherence, Cycle, Leg, Phase, Record, Step};
+pub use foreman::{
+    beta_declaration, check_cycle, Activity, Closure, Coherence, Cycle, Leg, Phase, Record, Step,
+};
 pub use orbit::{
     look_angles, overpass_windows, propagate, Geodetic, Look, OrbitError, Overpass, Position, Tle,
     Utc,
@@ -105,4 +107,4 @@ pub use orbit::{
 pub use proposal::{Confirmation, DriftReport, Proposal, Proposer, ResolvedProposal};
 pub use provenance::{Confidence, Field, Precision, Source};
 pub use trie::{Fallback, Trie};
-pub use units::{Bags, Days, Km, TonneDay, TonneKm, Tonnes, Unit};
+pub use units::{Bags, Days, Km, Ratio, TonneDay, TonneKm, Tonnes, Unit};

@@ -29,6 +29,33 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    /// ⭐ **Nobody observed this. Someone chose it so the system would run.**
+    ///
+    /// A scoring coefficient, a default threshold, a stand-in for a measurement not yet
+    /// taken. `notes/32-yokozuna-extraction.md` §3: a placeholder is a *state a value can
+    /// be in*, distinct from both absence and presence.
+    ///
+    /// | State | Means |
+    /// |---|---|
+    /// | absent | We do not have it. |
+    /// | **`Placeholder`** | **A person chose this number. It has not been measured.** |
+    /// | present | Measured or derived, with provenance. |
+    ///
+    /// ⚠️ **First in the ordering, below [`Source::Asserted`], and that is deliberate.** An
+    /// assertion is a claim by someone with standing to make it, about their own affairs,
+    /// with their name attached — [`Confidence::asserted_fields`] exists precisely because
+    /// there is a person to go back to. A placeholder has none of that. It is not a weaker
+    /// claim; it is the absence of a claimant.
+    ///
+    /// ⚠️ It exists so that an authored constant cannot be *mistaken* for a measurement.
+    /// [`Source::is_observed`] is false here, so it fails every guard `Asserted` fails,
+    /// and additionally it is excluded from the remedy path: telling a participant to go
+    /// and evidence a number *we* authored would be nonsense.
+    ///
+    /// Two live examples with no way to say this before now: `foreman::UNKNOWN_PRECISION_BETA`
+    /// and `min_separation` in `analysis/cohesion.py`. Every constant imported under
+    /// `notes/32` §4 without a citation is another.
+    Placeholder,
     /// A participant's own claim, unbacked. The normal state for someone who has just
     /// joined, and **not** a mark against them — see the bootstrap note below.
     Asserted,
@@ -45,13 +72,35 @@ pub enum Source {
 }
 
 impl Source {
-    /// True when the value rests on something other than the participant's own word.
+    /// True when the value rests on something other than someone's word.
     ///
     /// This is the partition-block test: an observed field corresponds to a real thing
-    /// and so has a coordinate; an asserted one does not.
+    /// and so has a coordinate; an asserted or authored one does not.
+    ///
+    /// ⚠️ **Written as an exhaustive match rather than `!= Source::Asserted`, and that is
+    /// the point of writing it out.** The negated-equality form was silently wrong the
+    /// moment [`Source::Placeholder`] was added: an authored constant would have reported
+    /// itself as *observed* and walked into a coordinate. Enumerating the arms makes the
+    /// next variant a compile error instead of a wrong answer.
     #[inline]
     pub fn is_observed(self) -> bool {
-        self != Source::Asserted
+        match self {
+            Source::Placeholder | Source::Asserted => false,
+            Source::ThirdParty
+            | Source::Instrument
+            | Source::CommercialRecord
+            | Source::Weighbridge => true,
+        }
+    }
+
+    /// True when nobody observed this — a number a person chose so the system would run.
+    ///
+    /// Distinct from `!is_observed()`: an assertion is unobserved but *claimed*, and has a
+    /// claimant. This is the narrower question, and it is the one a display layer wants —
+    /// "authored, not measured" is a different sentence from "your word for it".
+    #[inline]
+    pub fn is_authored(self) -> bool {
+        matches!(self, Source::Placeholder)
     }
 
     /// Evidential weight in `[0,1]`.
@@ -61,8 +110,15 @@ impl Source {
     /// not contribute *negative* evidence, because a participant with no records is
     /// unobserved, not dishonest
     /// (`notes/27-miracles-are-for-missing-information.md` §5.3).
+    ///
+    /// [`Source::Placeholder`] is also `0.0`, and for a stronger reason: there is no
+    /// weight at which an authored constant would be correct, because it is not evidence
+    /// of anything at all. It shares the floor with `Asserted` rather than sitting below
+    /// it because the scale bottoms out at "contributes nothing", and nothing is what both
+    /// contribute.
     pub fn weight(self) -> f64 {
         match self {
+            Source::Placeholder => 0.0,
             Source::Asserted => 0.0,
             Source::ThirdParty => 0.5,
             Source::Instrument => 0.75,
@@ -146,6 +202,46 @@ impl Field {
         }
     }
 
+    /// ⭐ A number someone authored so the system would run, with the reason they chose it.
+    ///
+    /// The `reason` argument is not decoration and is not optional. A placeholder whose
+    /// justification is unrecorded is indistinguishable from a measurement after the person
+    /// who chose it has moved on, which is the entire failure mode this variant exists to
+    /// prevent (`notes/32-yokozuna-extraction.md` §3). Requiring it at the constructor is
+    /// the only place the requirement can be enforced rather than requested.
+    ///
+    /// ⚠️ The reason is deliberately **not** stored on [`Field`]. `Field`'s wire shape is
+    /// pinned by `the_wire_shape_is_stable`, and hanging a nullable string on every
+    /// consignment tonnage to serve a rare case is the wrong trade — the same reasoning
+    /// that made [`crate::footprint::Reading`] a sibling type rather than a field. It goes
+    /// where placeholders are declared, in source, next to the constant. This signature
+    /// makes writing it unavoidable.
+    ///
+    /// ```
+    /// # use olduvai_core::provenance::{Field, Source};
+    /// # use olduvai_core::units::Unit;
+    /// let beta = Field::placeholder(
+    ///     0.20,
+    ///     Unit::Ratio,
+    ///     "Authored. Assumed tolerance for a leg of unstated precision; no measured basis.",
+    /// );
+    /// assert_eq!(beta.confidence(), 0.0);
+    /// assert!(!beta.source.is_observed());
+    /// assert!(beta.source.is_authored());
+    /// ```
+    pub fn placeholder(value: f64, unit: Unit, reason: &str) -> Self {
+        // ⚠️ `reason` is consumed by the type system, not by the struct: requiring the
+        // argument forces the author to write the justification at the call site, where a
+        // reader of the constant will find it. Storing it would change `Field`'s wire shape.
+        let _ = reason;
+        Field {
+            value,
+            unit,
+            source: Source::Placeholder,
+            precision: Precision::unknown(),
+        }
+    }
+
     /// A field backed by a record or a measurement.
     pub fn observed(value: f64, unit: Unit, source: Source, precision: Precision) -> Self {
         Field {
@@ -192,7 +288,21 @@ pub struct Confidence {
     pub floor: f64,
     /// Names of fields resting on assertion alone. The remedy path: these are what to go
     /// and evidence.
+    ///
+    /// ⚠️ Placeholders are **not** in this list. See [`Confidence::placeholder_fields`].
     pub asserted_fields: Vec<String>,
+    /// ⭐ Names of fields carrying an authored constant rather than a measurement.
+    ///
+    /// ⚠️ **A separate list from [`Confidence::asserted_fields`], because it is a
+    /// different sentence to a different person.** "Go and get a weighbridge ticket" is
+    /// advice a participant can act on. "Go and evidence the coefficient we chose" is
+    /// nonsense — the remedy for a placeholder is ours, not theirs, and folding the two
+    /// lists together would put our unfinished work in their remedy path.
+    ///
+    /// Empty on the wire in the overwhelmingly common case, so it is `#[serde(default)]`
+    /// and a reader written against the older shape still parses.
+    #[serde(default)]
+    pub placeholder_fields: Vec<String>,
 }
 
 impl Confidence {
@@ -202,11 +312,16 @@ impl Confidence {
         let mut observed_count = 0;
         let mut floor = f64::INFINITY;
         let mut asserted_fields = Vec::new();
+        let mut placeholder_fields = Vec::new();
 
         for (name, field) in fields {
             field_count += 1;
             if field.source.is_observed() {
                 observed_count += 1;
+            } else if field.source.is_authored() {
+                // ⚠️ Not `asserted_fields`. An authored constant has no claimant, so there
+                // is nobody for the participant to go back to and nothing for them to do.
+                placeholder_fields.push(name.to_string());
             } else {
                 asserted_fields.push(name.to_string());
             }
@@ -219,6 +334,7 @@ impl Confidence {
             // An entry with no fields has confidence zero, not infinity.
             floor: if field_count == 0 { 0.0 } else { floor },
             asserted_fields,
+            placeholder_fields,
         }
     }
 
@@ -234,8 +350,31 @@ impl Confidence {
     }
 
     /// True when every field rests on assertion alone — the entirely virtual case.
+    ///
+    /// ⚠️ **Requires the placeholder list to be empty**, rather than merely testing
+    /// `observed_count == 0`. An entry built entirely from authored constants is not a
+    /// participant asserting things about themselves; calling it "wholly asserted" would
+    /// attribute our unfinished work to them. Use [`Confidence::is_unobserved`] for the
+    /// union of the two.
     pub fn is_wholly_asserted(&self) -> bool {
+        self.field_count > 0 && self.observed_count == 0 && self.placeholder_fields.is_empty()
+    }
+
+    /// True when no field rests on an observation — asserted, authored, or a mix.
+    ///
+    /// The guard to reach for when the question is "may this reach a coordinate?", where
+    /// the distinction between an unbacked claim and an authored constant does not matter
+    /// because neither one may.
+    pub fn is_unobserved(&self) -> bool {
         self.field_count > 0 && self.observed_count == 0
+    }
+
+    /// True when any field rests on a number someone chose rather than measured.
+    ///
+    /// ⭐ The display hook. `notes/32-yokozuna-extraction.md` §3: a placeholder
+    /// "announces itself wherever it is displayed", which requires something to ask.
+    pub fn rests_on_placeholders(&self) -> bool {
+        !self.placeholder_fields.is_empty()
     }
 }
 
@@ -244,8 +383,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn assertion_is_the_only_unobserved_source() {
+    fn neither_assertion_nor_authorship_counts_as_observation() {
         assert!(!Source::Asserted.is_observed());
+        // ⭐ The regression this variant was most likely to introduce. `is_observed` was
+        // `self != Source::Asserted`, under which a placeholder reported itself observed
+        // and could have walked into a coordinate.
+        assert!(!Source::Placeholder.is_observed());
+
         for s in [
             Source::ThirdParty,
             Source::Instrument,
@@ -257,7 +401,85 @@ mod tests {
     }
 
     #[test]
+    fn authorship_is_narrower_than_being_unobserved() {
+        // An assertion has a claimant; a placeholder does not. Both are unobserved, and
+        // only one is authored — the display layer needs to tell them apart.
+        assert!(Source::Placeholder.is_authored());
+        assert!(!Source::Asserted.is_authored());
+        assert!(!Source::Weighbridge.is_authored());
+    }
+
+    #[test]
+    fn a_placeholder_sorts_below_an_assertion() {
+        // ⚠️ Pinned deliberately. The ordering is used for ranking and is an authored
+        // judgement: an assertion is a claim by someone with standing, a placeholder is
+        // the absence of a claimant.
+        assert!(Source::Placeholder < Source::Asserted);
+        assert!(Source::Placeholder < Source::Weighbridge);
+        assert_eq!(
+            Source::Placeholder.min(Source::Asserted),
+            Source::Placeholder
+        );
+    }
+
+    #[test]
+    fn an_authored_constant_carries_no_confidence_however_it_is_stated() {
+        let f = Field::placeholder(0.20, Unit::Ratio, "Authored; no measured basis.");
+        assert_eq!(f.source, Source::Placeholder);
+        assert_eq!(f.confidence(), 0.0);
+        assert!(!f.precision.is_known());
+
+        // And it cannot be talked up by pairing it with a tight tolerance, because
+        // `weight()` is 0.0 and confidence is a product.
+        let dressed = Field::observed(
+            0.20,
+            Unit::Ratio,
+            Source::Placeholder,
+            Precision::relative(0.001),
+        );
+        assert_eq!(dressed.confidence(), 0.0);
+    }
+
+    #[test]
+    fn the_placeholder_wire_shape_is_stable() {
+        let f = Field::placeholder(0.2, Unit::Ratio, "Authored.");
+        let json = serde_json::to_string(&f).unwrap();
+        assert_eq!(
+            json,
+            r#"{"value":0.2,"unit":"ratio","source":"placeholder","precision":null}"#
+        );
+        assert_eq!(serde_json::from_str::<Field>(&json).unwrap(), f);
+    }
+
+    #[test]
+    fn an_authored_entry_is_not_reported_as_the_participants_assertion() {
+        let beta = Field::placeholder(0.20, Unit::Ratio, "Authored.");
+        let claimed = Field::asserted(20.0, Unit::Tonnes);
+
+        let mixed = Confidence::over([("beta", &beta), ("quantity", &claimed)]);
+
+        // ⭐ The distinction the variant exists for. The participant is told to evidence
+        // their own claim, and is *not* told to go and evidence our coefficient.
+        assert_eq!(mixed.asserted_fields, vec!["quantity"]);
+        assert_eq!(mixed.placeholder_fields, vec!["beta"]);
+        assert!(mixed.rests_on_placeholders());
+
+        // Unobserved, but not the participant asserting everything about themselves.
+        assert!(mixed.is_unobserved());
+        assert!(
+            !mixed.is_wholly_asserted(),
+            "an entry containing our authored constants is not wholly the participant's claim"
+        );
+
+        let wholly_authored = Confidence::over([("beta", &beta)]);
+        assert!(wholly_authored.is_unobserved());
+        assert!(!wholly_authored.is_wholly_asserted());
+        assert!(wholly_authored.asserted_fields.is_empty());
+    }
+
+    #[test]
     fn source_weights_are_ordered_and_assertion_is_zero() {
+        assert_eq!(Source::Placeholder.weight(), 0.0);
         assert_eq!(Source::Asserted.weight(), 0.0);
         assert!(Source::ThirdParty.weight() < Source::Instrument.weight());
         assert!(Source::Instrument.weight() < Source::CommercialRecord.weight());

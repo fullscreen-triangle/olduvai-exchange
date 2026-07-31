@@ -245,7 +245,12 @@ impl Tle {
 
     /// Within [`Tle::MAX_USEFUL_AGE_DAYS`] of epoch, in either direction.
     pub fn is_fresh(&self, at: Utc) -> bool {
-        self.age_days(at).abs() <= Self::MAX_USEFUL_AGE_DAYS
+        Self::is_within_useful_age(self.age_days(at))
+    }
+
+    /// The same test on a bare age, for callers holding a [`Position`] rather than a [`Tle`].
+    pub fn is_within_useful_age(age_days: f64) -> bool {
+        age_days.abs() <= Self::MAX_USEFUL_AGE_DAYS
     }
 
     /// Orbital period in minutes, from the mean motion.
@@ -398,6 +403,14 @@ impl Position {
     /// travels with [`Self::source`], which is [`Source::Instrument`] — a computation from a
     /// published measurement, not a participant's word and not a weighbridge either.
     pub fn precision(&self) -> Precision {
+        // ⚠️ Past the useful age the elements no longer describe the orbit at all, and a
+        // computed tolerance would be a *number* where the truth is an absence. Collapsing to
+        // unknown rather than reporting 12% is the honest answer: `Precision::unknown()`
+        // yields confidence 0, so a stale position cannot quietly carry weight.
+        if !Tle::is_within_useful_age(self.tle_epoch_age_days) {
+            return Precision::unknown();
+        }
+
         let r = (self.eci_km[0].powi(2) + self.eci_km[1].powi(2) + self.eci_km[2].powi(2)).sqrt();
         if r <= 0.0 {
             return Precision::unknown();
@@ -1050,7 +1063,7 @@ mod tests {
 
     /// ISS, for a second inclination and a much lower orbit.
     const ISS_1: &str = "1 25544U 98067A   21001.50000000  .00001764  00000-0  39869-4 0  9996";
-    const ISS_2: &str = "2 25544  51.6443 306.1064 0000670  95.0000 265.0000 15.49180547000019";
+    const ISS_2: &str = "2 25544  51.6443 306.1064 0000670  95.0000 265.0000 15.49180547000010";
 
     fn s2a() -> Tle {
         Tle::parse(S2A_1, S2A_2).expect("the fixture must parse")
@@ -1273,7 +1286,7 @@ mod tests {
         // where SDP4 is required. Returning a near-earth answer here would be wrong by
         // thousands of km and look entirely plausible.
         let geo1 = "1 41866U 16071A   21001.50000000 -.00000267  00000-0  00000-0 0  9995";
-        let geo2 = "2 41866   0.0175  92.1234 0001234 180.0000 180.0000  1.00270000 15001";
+        let geo2 = "2 41866   0.0175  92.1234 0001234 180.0000 180.0000  1.00270000 15005";
         let t = Tle::parse(geo1, geo2).unwrap();
         assert!(matches!(
             propagate(&t, Utc::from_julian(t.epoch_julian())),

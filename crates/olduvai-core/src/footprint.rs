@@ -542,9 +542,11 @@ mod tests {
 
     #[test]
     fn distances_are_about_right() {
-        // Harare to Bulawayo is roughly 440 km great-circle.
+        // ⚠️ Harare to Bulawayo is ~366 km great-circle. The commonly quoted ~440 km is the
+        // *road* distance, which is a different quantity — noted because using it here as a
+        // bound would have declared a correct implementation broken.
         let d = great_circle_km(harare(), Geodetic::surface(-20.15, 28.58));
-        assert!((400.0..480.0).contains(&d), "got {d} km");
+        assert!((360.0..372.0).contains(&d), "got {d} km");
         assert_eq!(great_circle_km(harare(), harare()), 0.0);
 
         // One degree of latitude is ~111 km anywhere.

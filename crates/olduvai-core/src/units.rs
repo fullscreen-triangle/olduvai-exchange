@@ -81,7 +81,14 @@ macro_rules! quantity {
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{} {}", self.0, $symbol)
+                // A dimensionless quantity has an empty symbol, and appending it would
+                // render "0.2 " with a trailing space. The absence of a unit is correct
+                // here rather than a gap to be filled with an invented one.
+                if $symbol.is_empty() {
+                    write!(f, "{}", self.0)
+                } else {
+                    write!(f, "{} {}", self.0, $symbol)
+                }
             }
         }
     };
@@ -126,6 +133,26 @@ quantity!(
     "bag"
 );
 
+quantity!(
+    /// A dimensionless ratio: a relative tolerance, a fraction, a coefficient.
+    ///
+    /// ⚠️ **Added for [`crate::provenance::Field::placeholder`], and narrowly.** An
+    /// authored coefficient like `foreman::UNKNOWN_PRECISION_BETA` has to be recordable as
+    /// a `Field`, and every existing unit would be a lie about what the number *is* —
+    /// tagging a 20% tolerance as `Days` puts a false dimension on the wire to dodge the
+    /// absence of a true one.
+    ///
+    /// ⚠️ It is deliberately **not** a general escape hatch. `Ratio` has no conversion to
+    /// or from any other quantity and never will: a ratio *of* what is not carried by the
+    /// type, so `Ratio(0.2) * Tonnes(20.0)` is not offered, because the reader could not
+    /// tell whether it meant 20% of the mass or something else entirely. Scaling a
+    /// quantity by a bare `f64` already exists for that and shows the factor at the call
+    /// site. Reach for `Ratio` when a dimensionless number must be *recorded*, not when
+    /// arithmetic is inconvenient.
+    Ratio,
+    ""
+);
+
 impl Tonnes {
     /// Mass moved over a distance.
     #[inline]
@@ -153,6 +180,8 @@ pub enum Unit {
     TonneDay,
     Days,
     Bags,
+    /// Dimensionless. See the [`Ratio`] type for why this exists and how narrow it is.
+    Ratio,
 }
 
 impl Unit {
@@ -164,6 +193,10 @@ impl Unit {
             Unit::TonneDay => TonneDay::SYMBOL,
             Unit::Days => Days::SYMBOL,
             Unit::Bags => Bags::SYMBOL,
+            // ⚠️ Empty, and deliberately so. A display layer that wants to write "20%"
+            // is applying a *presentation* to a ratio; inventing "%" as the symbol here
+            // would make `Ratio(0.2)` claim to be twenty of something.
+            Unit::Ratio => Ratio::SYMBOL,
         }
     }
 }
@@ -217,6 +250,26 @@ mod tests {
         assert_eq!(Unit::TonneKm.symbol(), "t·km");
         assert_eq!(Unit::TonneDay.symbol(), "t·day");
         assert_eq!(Unit::Bags.symbol(), "bag");
+        // ⚠️ Empty on purpose, and pinned so that nobody later "fixes" it to "%" — which
+        // would silently multiply every displayed ratio by 100.
+        assert_eq!(Unit::Ratio.symbol(), "");
+    }
+
+    #[test]
+    fn a_dimensionless_quantity_renders_without_a_trailing_space() {
+        assert_eq!(Ratio(0.2).to_string(), "0.2");
+        assert_eq!(Days(14.0).to_string(), "14 day");
+    }
+
+    #[test]
+    fn the_unit_tag_is_stable_on_the_wire() {
+        // The serde tag, which is what actually crosses the API boundary.
+        assert_eq!(serde_json::to_string(&Unit::Ratio).unwrap(), r#""ratio""#);
+        assert_eq!(serde_json::to_string(&Unit::Tonnes).unwrap(), r#""tonnes""#);
+        assert_eq!(
+            serde_json::to_string(&Unit::TonneKm).unwrap(),
+            r#""tonne_km""#
+        );
     }
 }
 

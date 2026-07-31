@@ -34,6 +34,7 @@
 //! distinct sources rather than steps, so re-inspecting the same way twice earns nothing.
 
 use crate::provenance::{Confidence, Field, Source};
+use crate::units::Unit;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -395,7 +396,30 @@ fn accumulated_beta(cycle: &Cycle) -> f64 {
 /// tolerance in the system, so that unknown precision is never accidentally the tightest
 /// leg. It should be replaced by a measured value — the same open gap as the cohesion
 /// test's `min_separation`.
+///
+/// ⭐ This is [`Source::Placeholder`] in the sense `notes/32-yokozuna-extraction.md` §3
+/// gives the word: a number a person chose so the system would run. It stays a bare `f64`
+/// because it is used arithmetically rather than recorded — [`accumulated_beta`] multiplies
+/// by it — and a [`Field`] here would buy a `source` tag that nothing reads at the cost of
+/// unwrapping on a hot path. **Where the value is recorded rather than multiplied,
+/// [`Field::placeholder`] is the constructor.** See [`beta_declaration`].
 pub const UNKNOWN_PRECISION_BETA: f64 = 0.20;
+
+/// β's assumed tolerance as a recordable value, for anything that publishes `Φ_R`.
+///
+/// ⭐ The bridge between the constant and the ledger. [`UNKNOWN_PRECISION_BETA`] is a bare
+/// `f64` because it is multiplied; when the same number has to *appear* in a published
+/// parameter set or a rendered explanation, it must arrive carrying the fact that nobody
+/// measured it. This is that form, and it is the only one a display layer should be given.
+pub fn beta_declaration() -> Field {
+    Field::placeholder(
+        UNKNOWN_PRECISION_BETA,
+        Unit::Ratio,
+        "Authored, not measured. Chosen to be wider than any stated tolerance in the \
+         system so that unknown precision is never accidentally the tightest leg. \
+         Replace with a measured value once leg tolerances are characterised.",
+    )
+}
 
 /// Walk a cycle and report whether it closes.
 ///
