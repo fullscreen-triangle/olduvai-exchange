@@ -203,6 +203,12 @@ impl Tle {
         }
 
         let mean_motion = field_f64(l2, 52..63, "mean motion")?;
+        // ⚠️ Negated `>` rather than `<=`, and clippy's suggestion to use `partial_cmp` must be
+        // declined: the two are not equivalent on a partially ordered type. `!(n > 0.0)` is true
+        // for NaN and rejects it; `n <= 0.0` is false for NaN and would let it through into the
+        // propagator, where it would silently poison every derived position instead of failing
+        // at the parse. The unreadability clippy objects to is the point being made.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(mean_motion > 0.0) {
             return Err(OrbitError::MeanMotion(mean_motion));
         }
@@ -912,7 +918,7 @@ fn c3(
 fn gmst(at: Utc) -> f64 {
     // IAU 1982, the expression SGP4 is conventionally paired with.
     let ut1 = (at.julian() - 2451545.0) / 36525.0;
-    let mut theta = 67310.548_41
+    let mut theta = 67_310.548_41
         + (876600.0 * 3600.0 + 8640184.812_866) * ut1
         + 0.093_104 * ut1 * ut1
         - 6.2e-6 * ut1 * ut1 * ut1;

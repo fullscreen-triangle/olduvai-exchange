@@ -2,7 +2,7 @@ import { authHeaders, requireSession } from "@/lib/api/session";
 import { fail, forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
 
 /**
- * Process views: transport, payments, monitoring, knowledge graph.
+ * Process views: foreman, transport, payments, monitoring, knowledge graph, predictions.
  *
  * Unlike the feeds, all of these *are* `olduvai-server`'s business — they are views onto
  * coalitions, legs, and the ledger. They are one route because they are one traversal:
@@ -17,6 +17,21 @@ import { fail, forward, methodNotAllowed, notImplemented } from "@/lib/api/upstr
  */
 
 const STAGES = {
+  /**
+   * ⭐ First in the table because it is the only stage that is a participant's own record
+   * rather than the exchange's.
+   *
+   * Note 33 §3: the foreman is advisory to one person, checked for coherence against itself,
+   * and carries no weight on the exchange — *"If a farmer lies, they will get wrong results
+   * and thats it."* Platform guarantees attach at sale. That is why it sits on the process
+   * rail without a provenance guard: there is nothing here to defend against.
+   */
+  foreman: {
+    label: "Foreman",
+    path: "/v1/foreman",
+    blockedBy: "no-participant-record",
+    note: "Your own append-only record of your own activity, checked for coherence against itself. It is advisory to you and carries no weight on the exchange. Nothing has been recorded yet.",
+  },
   transport: {
     label: "Transport",
     path: "/v1/coalitions/assemble",
@@ -40,6 +55,26 @@ const STAGES = {
     path: "/v1/graph",
     blockedBy: "cohesion-gate",
     note: "The graph is the occupied trie. Until the cohesion test passes, its structure is not known to mean anything (notes/30 §7 step 3).",
+  },
+  /**
+   * ⚠️ The one stage here that may never unblock, and the note says so rather than implying
+   * a schedule.
+   *
+   * Every other gate in this table waits on work — a test to run, a ledger to fill, sensors
+   * to seal. This one waits on a decision that an honest forecast is possible at all at the
+   * resolution of a single holding.
+   *
+   * ⭐ It is also the stage most likely to be "solved" by reaching for a model, and that is
+   * exactly what `README.md`'s third AI exclusion forbids: an entry must be recomputable
+   * from the ledger years later by someone who does not have the model that produced it. A
+   * plausible unrecomputable number is worse than no number, because it will be read as
+   * evidence and there is no way to check it.
+   */
+  predictions: {
+    label: "Predictions",
+    path: "/v1/predictions",
+    blockedBy: "no-forecast-method",
+    note: "A prediction here would have to be recomputable from the ledger years later by someone without the model that produced it. No method meeting that has been chosen, and whether one exists at single-holding resolution is an open question. This shows nothing rather than a number that would be read as evidence.",
   },
 };
 

@@ -145,22 +145,62 @@ export default function RailPage({ children }) {
 }
 
 /**
- * What a feed would carry, stated before it carries anything.
+ * What a source would carry, stated before it carries anything.
  *
- * ⭐ `source: asserted` is the load-bearing line. Note 27 §4 splits observed from asserted,
- * and a third-party reading is always the latter — so a value from this feed can inform a
- * person but can never become evidence in a coalition. Saying so on the empty page means
- * whoever wires the provider later reads the constraint before they write the fetch.
+ * ⭐ The provenance line is the load-bearing one. Note 27 §4 splits observed from asserted,
+ * and stating which a source is — on the empty page, before anyone writes the fetch — means
+ * whoever wires the provider later reads the constraint first.
+ *
+ * # ⚠️ The caption used to be a constant, and that was a latent lie
+ *
+ * This originally rendered a fixed *"— context, not evidence"* after `declaration.source`,
+ * which was accurate while every declaration came from `api/feeds`, where note 27 §4 makes
+ * `asserted` universal *"deliberately and without exception"*. The observation sources added
+ * from note 31 item 2 broke that: an overpass propagated from published elements is
+ * `instrument`, because the element set and the timestamp are in the ledger and the
+ * arithmetic is published, so anyone can recompute it and get our bytes.
+ *
+ * Leaving the constant would have labelled our own computation as non-evidence on the very
+ * pages where the distinction is the whole point. The caption is now derived from the value
+ * it is describing.
  */
+const PROVENANCE_CAPTION = {
+  asserted: "context, not evidence",
+  instrument: "measured, and admissible",
+  placeholder: "a stand-in for a measurement not yet made",
+};
+
+/**
+ * ⭐ What each observation shape constrains — the honest reading of note 33 §2.
+ *
+ * ⚠️ These are not synonyms for "a position". A corridor says the participant is near a line
+ * and says **nothing** about where along it, and flattening that into a point would fabricate
+ * an along-track position nobody observed. Spelling it out on the page is what stops the four
+ * observation rails being read as four ways of getting a lat/lng.
+ */
+const CONSTRAINT_CAPTION = {
+  fix: "a point, isotropically",
+  corridor: "distance from a line — not a place along it",
+  within: "a region, at that region's own size",
+  overpass: "a window in which a reading could be taken",
+  estimate: "the fold of every observation so far",
+};
+
 function Declaration({ declaration }) {
   const units = Object.entries(declaration.units ?? {});
+  const caption = PROVENANCE_CAPTION[declaration.source];
+  const constraint = CONSTRAINT_CAPTION[declaration.constrains];
 
   return (
     <dl className="mt-4 divide-y divide-border/60 rounded-xl border border-border bg-surface/30 px-5 py-1 text-sm">
       <Row term="Provenance">
         <span className="text-light/90">{declaration.source}</span>
-        <span className="text-muted/60"> — context, not evidence</span>
+        {/* Omitted rather than guessed for an unknown value: a wrong caption here would
+            misstate whether a reading can carry evidential weight. */}
+        {caption && <span className="text-muted/60"> — {caption}</span>}
       </Row>
+      {constraint && <Row term="Constrains">{constraint}</Row>}
+      {declaration.sigma && <Row term="Uncertainty">{declaration.sigma}</Row>}
       {units.length > 0 && (
         <Row term="Units">
           {units.map(([k, v]) => `${k} (${v})`).join(", ")}

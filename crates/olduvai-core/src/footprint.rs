@@ -123,7 +123,7 @@ impl Footprint {
     /// A short human phrase, for the frontend's declaration line.
     pub fn describe(self) -> String {
         match self {
-            Footprint::Point { radius_km } if radius_km == 0.0 => "a single point".to_string(),
+            Footprint::Point { radius_km: 0.0 } => "a single point".to_string(),
             Footprint::Point { radius_km } => format!("a point, held over {radius_km} km"),
             Footprint::Swath {
                 across_track_km,

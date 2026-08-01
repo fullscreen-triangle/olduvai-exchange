@@ -43,15 +43,54 @@ import { GATES, LEFT_RAIL, RIGHT_RAIL, findEntry } from "@/lib/navigation";
  */
 const DOMAINS = {
   "/dashboard/profile": "general",
+  // ⭐ The five position rails all take `scientific`, and deliberately not five domains. What
+  // a participant asks on any of them is the same question — what does this reading actually
+  // pin down, and how much does it move the estimate. Splitting them would give four
+  // specialists each of which knew about one instrument and none of which knew about the
+  // fold, which is the one thing the question is about.
+  "/dashboard/position": "scientific",
+  "/dashboard/terrain": "scientific",
+  "/dashboard/satellites": "scientific",
+  "/dashboard/flights": "scientific",
+  "/dashboard/gps": "scientific",
   "/dashboard/weather": "agronomy",
   "/dashboard/traffic": "logistics",
   "/dashboard/prices": "economics",
   "/dashboard/advisories": "agronomy",
+  "/dashboard/foreman": "agronomy",
   "/dashboard/transport": "logistics",
   "/dashboard/payments": "economics",
   "/dashboard/monitoring": "scientific",
   "/dashboard/graph": "scientific",
+  // ⚠️ `general`, not `agronomy`, and that is the point of the page. A yield specialist here
+  // would be a model with an opinion about the forecast on the one page whose whole content
+  // is that no forecast method has been chosen.
+  "/dashboard/predictions": "general",
   "/dashboard/ledger": "general",
+};
+
+/**
+ * What each observation shape constrains, told to the agent verbatim.
+ *
+ * ⚠️ Without this an agent on the flights page, asked "so where am I", has every incentive to
+ * answer with a point — the blurb says "tracks crossing your area" and a track has
+ * coordinates. It is the *along-track* silence that is the honest content of the reading, and
+ * silence is exactly what a model will fill in unless told not to.
+ *
+ * Kept in the prompt rather than left to the domain specialist because it is a fact about
+ * this system's data model, not about geodesy.
+ */
+const CONSTRAINT_NOTE = {
+  fix: "a point, isotropically, at the accuracy the receiver reported",
+  corridor:
+    "perpendicular distance from a line only. It says nothing whatever about where along " +
+    "that line the participant is, and you must not answer as though it did",
+  within: "a region, with an uncertainty set by that region's own size",
+  overpass:
+    "a time window in which a sensor could have taken a reading — not a position of the " +
+    "participant at all",
+  estimate:
+    "the combination of every observation so far, each weighted by the noise it admitted to",
 };
 
 /** The centre composer: the home page model itself, of which the others are instances. */
@@ -84,6 +123,9 @@ export function agentFor(href) {
     domain: DOMAINS[entry.href] ?? "general",
     subject: `The participant is on the "${entry.label}" page: ${entry.blurb}.`,
     blockedBy: entry.blockedBy,
+    // `undefined` for every non-observation page, which is correct: only those pages have a
+    // shape of constraint to state.
+    constrains: entry.constrains,
   };
 }
 
@@ -109,11 +151,24 @@ export function allAgents() {
  */
 export function systemPrompt(agent) {
   const gate = agent.blockedBy ? GATES[agent.blockedBy] : null;
+  const constraint = agent.constrains
+    ? CONSTRAINT_NOTE[agent.constrains]
+    : null;
 
   return [
     "You are an assistant on Olduvai Exchange, an agricultural produce exchange.",
     "",
     agent.subject,
+    ...(constraint
+      ? [
+          "",
+          `A reading on this page constrains ${constraint}.`,
+          "No source here is a check on any other. Every source is weak on its own and states",
+          "how weak; they are combined by a filter, weighted by that admitted noise. Do not",
+          "describe one source as verifying or confirming another, and do not present any",
+          "single one as authoritative.",
+        ]
+      : []),
     "",
     "How this exchange works, and what that means for you:",
     "",

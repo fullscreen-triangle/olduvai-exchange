@@ -21,22 +21,110 @@
  * Someone reading the left rail is orienting. Someone reading the right rail is tracking
  * something already in motion. A single merged menu would have flattened that, and the two
  * carry different evidential weight, which is not a distinction to bury in a list.
+ *
+ * # ⭐ What note 31 items 2 and 3 changed, and what they did not
+ *
+ * The note lists a left rail of Terrain, Satellites, Shipping, Flights, GPS, Atmosphere,
+ * Economics and Traffic, and a right rail of Knowledge Graph and Predictions. It supplies
+ * globe.gl and d3 examples for four of them.
+ *
+ * ⭐ **Four of those eight left entries are the same thing: position observation sources.**
+ * Satellites, Flights, GPS and Terrain are not four integrations. They are four shapes of
+ * input to `olduvai_core::fusion` — a `Corridor` from an overflying aircraft, a `Fix` from a
+ * handset, a `Reading` with a footprint from a terrain tile, an `Overpass` computed from a
+ * TLE. Note 33 reached that conclusion from the data side; the rail reaches it from the
+ * navigation side, and they have to agree or the rail is lying about what the pages are.
+ *
+ * So `kind: "observation"` is carried on those entries. It is not decoration: it is what
+ * lets a page say *what its data would constrain* while it has none, and it is what stops
+ * the four drifting into four unrelated map widgets.
+ *
+ * ⚠️ **Shipping did not survive.** The example is a submarine-cable map. This exchange moves
+ * maize by road between inland holdings; a cable landing point constrains nothing about a
+ * consignment. Freight *corridors* matter and are already Transport on the right rail, where
+ * they belong, because a leg is process rather than context. Keeping "Shipping" would have
+ * meant keeping a rail entry for the sake of the example that produced it.
+ *
+ * ⚠️ **Atmosphere folded into Weather rather than sitting beside it.** The note's own weather
+ * example fetches eight parameters from one Open-Meteo call — temperature, humidity,
+ * pressure, dew point, cloud, wind, precipitation. Those *are* the atmosphere. Two rail
+ * entries over one provider call would have been two pages arguing about which owns pressure.
  */
 
-/** Where each rail's data comes from — see `pages/api/_upstream.js`. */
+/**
+ * Where each rail's data comes from — see `lib/api/upstream.js`.
+ *
+ * `kind` is read by the assistant and by the page, and has three values:
+ *
+ *   - `"observation"` — would contribute to `fusion::Estimate` for this participant. The
+ *     entry names the `Observation` variant it produces in `constrains`.
+ *   - `"context"` — informs a person, never becomes a field. Always `Source::Asserted`.
+ *   - `"process"` — a view onto the exchange's own record.
+ */
 export const LEFT_RAIL = [
   {
     href: "/dashboard/profile",
     label: "Profile",
     blurb: "Your entry, address, and per-field provenance",
     api: "/api/participants/me",
+    kind: "process",
     blockedBy: "participant-identity",
+  },
+  {
+    href: "/dashboard/position",
+    label: "Position",
+    blurb: "Every observation of where you are, and how well they agree",
+    api: "/api/position",
+    kind: "observation",
+    constrains: "estimate",
+    blockedBy: "no-observations",
+  },
+  {
+    href: "/dashboard/terrain",
+    label: "Terrain",
+    blurb: "Elevation and slope under your holding, at a stated resolution",
+    api: "/api/observe/terrain",
+    kind: "observation",
+    constrains: "within",
+    blockedBy: "no-provider",
+  },
+  {
+    href: "/dashboard/satellites",
+    label: "Satellites",
+    blurb: "What passes overhead, propagated from published elements",
+    api: "/api/observe/satellites",
+    kind: "observation",
+    // ⚠️ `within`, not `overpass`. An overpass is the window in which a sensor could have
+    // seen the holding; the observation is the reading taken during it, and a reading covers
+    // ground. `constrains` names an `Observation` variant that exists in `olduvai-core`, and
+    // `overpass` is not one — the server would refuse it with `wrong_shape`.
+    constrains: "within",
+    blockedBy: "no-elements",
+  },
+  {
+    href: "/dashboard/flights",
+    label: "Flights",
+    blurb: "Tracks crossing your area — a direction, not a place",
+    api: "/api/observe/flights",
+    kind: "observation",
+    constrains: "corridor",
+    blockedBy: "no-provider",
+  },
+  {
+    href: "/dashboard/gps",
+    label: "GPS",
+    blurb: "Fixes you have recorded, with their stated accuracy",
+    api: "/api/observe/gps",
+    kind: "observation",
+    constrains: "fix",
+    blockedBy: "no-observations",
   },
   {
     href: "/dashboard/weather",
     label: "Weather",
-    blurb: "Forecast for your stated location",
+    blurb: "Atmosphere over your holding, at the provider's grid resolution",
     api: "/api/feeds/weather",
+    kind: "context",
     blockedBy: "no-provider",
   },
   {
@@ -44,13 +132,15 @@ export const LEFT_RAIL = [
     label: "Traffic",
     blurb: "Conditions on haulage corridors",
     api: "/api/feeds/traffic",
+    kind: "context",
     blockedBy: "no-provider",
   },
   {
     href: "/dashboard/prices",
-    label: "Grain prices",
+    label: "Economics",
     blurb: "External reference quotes — not exchange prices",
     api: "/api/feeds/prices",
+    kind: "context",
     blockedBy: "no-provider",
   },
   {
@@ -58,16 +148,26 @@ export const LEFT_RAIL = [
     label: "Advisories",
     blurb: "Agronomic and phytosanitary notices",
     api: "/api/feeds/advisories",
+    kind: "context",
     blockedBy: "no-provider",
   },
 ];
 
 export const RIGHT_RAIL = [
   {
+    href: "/dashboard/foreman",
+    label: "Foreman",
+    blurb: "Your own record of your own activity, checked against itself",
+    api: "/api/process/foreman",
+    kind: "process",
+    blockedBy: "no-participant-record",
+  },
+  {
     href: "/dashboard/transport",
     label: "Transport",
     blurb: "Haulage legs and their provenance",
     api: "/api/process/transport",
+    kind: "process",
     blockedBy: "cohesion-gate",
   },
   {
@@ -75,6 +175,7 @@ export const RIGHT_RAIL = [
     label: "Payments",
     blurb: "Settlement against the append-only ledger",
     api: "/api/process/payments",
+    kind: "process",
     blockedBy: "gate-and-ledger",
   },
   {
@@ -82,6 +183,7 @@ export const RIGHT_RAIL = [
     label: "Monitoring",
     blurb: "Growing and handling, as recorded at source",
     api: "/api/process/monitoring",
+    kind: "process",
     blockedBy: "sealed-sensors",
   },
   {
@@ -89,13 +191,23 @@ export const RIGHT_RAIL = [
     label: "Knowledge graph",
     blurb: "The occupied trie this is all addressed in",
     api: "/api/process/graph",
+    kind: "process",
     blockedBy: "cohesion-gate",
+  },
+  {
+    href: "/dashboard/predictions",
+    label: "Predictions",
+    blurb: "What is forecast, what it rests on, and what it is not",
+    api: "/api/process/predictions",
+    kind: "process",
+    blockedBy: "no-forecast-method",
   },
   {
     href: "/dashboard/ledger",
     label: "Ledger",
     blurb: "Hash-chained assembly record",
     api: "/api/ledger",
+    kind: "process",
     blockedBy: "gate-and-ledger",
   },
 ];
@@ -151,6 +263,71 @@ export const GATES = {
     detail:
       "This feed needs an external provider, and choosing one is a research decision about what can be verified at what resolution — not a matter of picking an SDK.",
     reference: "notes/30-programming-structure.md §5.3",
+  },
+  /**
+   * ⭐ Not a gate on unbuilt machinery. The machinery exists.
+   *
+   * `olduvai_core::fusion` is implemented and tested; `Positions` in the server folds a log
+   * into an estimate and proves the fold. What is absent is *observations* — nobody has
+   * recorded any. Saying "no provider" here would be wrong in a way that matters: it would
+   * send someone to configure an API when what is needed is a first reading.
+   *
+   * ⚠️ **This no longer fires for an empty log on the position route, and that is the point.**
+   * `/v1/observe/:source` and `/v1/position` now exist upstream, and an unobserved participant
+   * gets `200` with the uninformed prior rather than a 503 — because "we do not know where you
+   * are, to within 200 km" is an *answer*. The gate remains for the rails that have no
+   * ingestion path at all, where there is genuinely nothing to ask for.
+   */
+  "no-observations": {
+    title: "Nothing observed yet",
+    detail:
+      "Position is folded from an observation log, and this source has contributed nothing to it. The filter is built and answers regardless: with no observations the estimate is the uninformed prior — a 200 km sigma, which is a statement that we do not know where you are rather than a rough guess.",
+    reference: "notes/33-position-fusion.md §5",
+  },
+  /**
+   * ⚠️ Not a research gate, and the only entry here that is nobody's decision.
+   *
+   * Every other gate in this table describes something unbuilt or undecided. This one means
+   * the machinery exists and did not answer — a stopped `olduvai-server`, a timeout, a 500.
+   * It is kept distinct from `no-observations` because conflating them would report an
+   * outage as an epistemic limit, which is the most flattering possible lie about a
+   * deployment.
+   */
+  "upstream-unreachable": {
+    title: "The exchange server did not answer",
+    detail:
+      "This view is computed by olduvai-server, which is unreachable, timed out, or returned an error. Nothing is wrong with the method — the numbers below are the uninformed prior's own values and not a cached estimate, so nothing shown here rests on a reading that was not taken.",
+    reference: "web/src/lib/api/upstream.js",
+  },
+  /**
+   * Distinct from `no-provider` on purpose: element sets are public and free, so this gate
+   * is about ingestion rather than about a commercial decision.
+   */
+  "no-elements": {
+    title: "No orbital elements loaded",
+    detail:
+      "An overpass here is a computation, not a lookup: the two-line element set and the timestamp go in the ledger so anyone can recompute the answer and get our bytes. No element set has been ingested, so there is nothing to propagate.",
+    reference: "notes/30-programming-structure.md §5.3, olduvai-core::orbit",
+  },
+  "no-participant-record": {
+    title: "No activity recorded",
+    detail:
+      "The foreman is your own append-only record of your own activity, checked for coherence against itself. It is advisory to you and carries no weight on the exchange — platform guarantees attach at sale. Nothing has been recorded yet.",
+    reference: "notes/33-position-fusion.md §3, olduvai-core::foreman",
+  },
+  /**
+   * ⚠️ The one gate in this table that may never lift, and the wording says so.
+   *
+   * Every other entry here waits on work. This one waits on a *decision that a forecast can
+   * be made honestly at all*. A yield prediction that cannot state what it rests on is a
+   * number that will be treated as evidence, and the exclusion of AI from synthesis exists
+   * precisely because a plausible unrecomputable number is worse than no number.
+   */
+  "no-forecast-method": {
+    title: "No forecast method chosen",
+    detail:
+      "A prediction shown here would have to be recomputable from the ledger years later by someone without the model that produced it. No method meeting that has been chosen, and it is an open question whether one exists at the resolution a single holding needs. Until then this page shows nothing rather than a number that would be read as evidence.",
+    reference: "notes/30-programming-structure.md §7 step 4",
   },
 };
 

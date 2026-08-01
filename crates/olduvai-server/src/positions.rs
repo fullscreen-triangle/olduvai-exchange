@@ -27,13 +27,13 @@
 //! This is why [`Estimate::update`] is order-independent: it makes `fold(log) == cache` a
 //! statement about the algorithm rather than a coincidence about arrival order.
 //!
-//! ⚠️ **Module-wide `allow(dead_code)`, deliberately.** No route reaches this yet, and that is
-//! the correct state rather than an omission: the crate doc explains that the routes stay
-//! stubbed until the cohesion gate passes, so wiring an endpoint now would be the premature
-//! step. The type is fully exercised by its tests, which is what the `fold(log) == cache`
-//! guarantee actually requires. ⭐ Delete this attribute the moment an endpoint calls
-//! [`Positions::observe`].
-#![allow(dead_code)]
+//! ⭐ **The module-wide `allow(dead_code)` is gone, as its own note instructed.**
+//! `routes::observe` calls [`Positions::observe`] and `routes::position` calls
+//! [`Positions::estimate`] and [`Positions::verify`], so the type is reachable and the
+//! compiler is once again the thing that notices when part of it stops being.
+//!
+//! ⚠️ [`Positions::divergent`] is the one member with no caller, and it keeps an attribute of
+//! its own rather than being deleted — see its doc.
 
 use std::collections::HashMap;
 
@@ -129,6 +129,15 @@ impl Positions {
     ///
     /// Empty is the only acceptable result; a non-empty one is a bug, not a condition to
     /// handle.
+    ///
+    /// ⚠️ **No route calls this, and that is right rather than an omission.** A per-request
+    /// check belongs on the participant being served — `routes::position` calls
+    /// [`Positions::verify`] and reports `cache_consistent` — because sweeping every
+    /// participant on every read is work proportional to the whole store for a question about
+    /// one row. This is the *operational* form of the same question, for a health check or an
+    /// admin sweep, and it is kept because deleting it would mean rewriting it under time
+    /// pressure the first time a divergence is suspected.
+    #[allow(dead_code)]
     pub fn divergent(&self) -> Vec<&str> {
         self.entries
             .keys()
@@ -137,6 +146,9 @@ impl Positions {
             .collect()
     }
 
+    /// ⚠️ Unreached by a route for the same reason as [`Positions::divergent`]: it is a
+    /// question about the store, and every endpoint asks about one participant.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
