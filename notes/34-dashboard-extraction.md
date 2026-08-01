@@ -202,22 +202,81 @@ entire content is that no forecast method has been chosen.
 `npm run lint` — clean. `npm run build` — 23 routes, all 17 dashboard pages and 12 API
 routes present, First Load JS unchanged at ~120 kB (no dependency added).
 
-⚠️ Every new page is blocked, and every new route returns 503 with its gate. That is the
+⚠️ Every new page was blocked, and every new route returned 503 with its gate. That was the
 correct state, not an unfinished one: `RailPage.js` fetches rather than rendering the gate
 statically, so these pages light up on their own the day an endpoint answers.
 
+⭐ **That day arrived for four of them, and no page changed.** Position, GPS, Terrain and
+Flights now answer 200 the moment `olduvai-server` is running, because §8's first item is
+done — the machinery was always the missing part, not the view. This is the check the design
+was making: if lighting the pages up had required editing them, the gate would have been
+decoration rather than a fetch.
+
 ---
 
-## 8. Open
+## 8. Done, and what it taught
 
-- **`/v1/position`, `/v1/observe/*`, `/v1/foreman` do not exist upstream.** `olduvai-server`
-  serves only `/health`; `positions.rs` carries a module-wide `allow(dead_code)` whose doc
-  instructs its own removal *"the moment an endpoint calls `Positions::observe`."* The BFF
-  routes forward to paths that will 502 until then, and fall to their gate — which is the
-  designed path, but the attribute is now one endpoint away from being wrong.
+**`/v1/position`, `/v1/observe/:source`, `/v1/foreman` exist upstream.** `routes.rs` and
+`participant.rs` are new; `positions.rs` lost its module-wide `allow(dead_code)` as its own
+doc instructed, keeping targeted attributes with reasons on the two members a route genuinely
+should not call. 197 tests pass, clippy is clean at `-D warnings`, and the four endpoints were
+exercised end-to-end through the BFF against a running server.
+
+Three decisions came out of building it that were not visible from the design:
+
+### ⭐ The source/shape pair had to be *enforced*, not documented
+
+A provider wired to `flights` posting a `fix` would be folded isotropically — inventing the
+along-track position `Corridor` exists to withhold. ⚠️ And it would produce a **tighter**
+sigma, so it would read as an improvement. `routes.rs` refuses it with 422 `wrong_shape`. The
+BFF keeps its own copy of the table as documentation for a reader, and the server's copy wins,
+because a check in the BFF is admissibility logic in the BFF.
+
+### ⭐ `satellites` constrains `within`, not `overpass`
+
+`overpass` was a category error hiding in a table, and it was in *three* files. An overpass is
+the window in which a sensor could have seen a holding; the observation is the reading taken
+during it, and a reading covers ground. `constrains` names an `Observation` variant, and
+`overpass` is not one — the manifest was telling anyone wiring a provider to send a shape that
+would be refused.
+
+### ⚠️ An outage must never be reported as a fact about the data
+
+The sharpest thing this session surfaced, and it was live behaviour that showed it rather than
+any test. With the server stopped, `/api/observe/gps` reported `no-observations` — *"Nothing
+observed yet"* — and `/api/process/foreman` reported `no-participant-record`. Both are claims
+about the participant's record, produced by a stopped process. A participant with a hundred
+readings would have been told they had none.
+
+⭐ **An outage that renders as an epistemic limit is the most flattering possible lie about a
+deployment**, because it reads as honesty. `upstream-unreachable` is now its own gate, and the
+routes distinguish it from the gates that describe genuinely unbuilt things — payments still
+falls to `gate-and-ledger` when the server is up and the route 502s, which is the case that
+matters.
+
+---
+
+## 9. Open
+
 - **Anisotropic covariance for `Corridor`** (note 33 §9) — would make flight tracks
   meaningfully stronger, and the flights page states a sigma that is currently across-track
-  only by collapse rather than by construction.
-- **Aerodrome and aircraft ingestion** — the sources themselves.
+  only by collapse rather than by construction. ⭐ Now the highest-value item: `Corridor`
+  readings are accepted end-to-end, so the weakness is in the arithmetic rather than in the
+  absence of a path to it.
+- **Aerodrome and aircraft ingestion** — the sources themselves. Nothing writes to the log
+  yet except a caller posting by hand.
+- **`Observation` does not record its own source.** `GET /v1/observe/:source` filters the
+  participant's log *by shape*, so `terrain` and a farmer's drawn boundary both produce
+  `within` and the endpoint cannot tell them apart. ⚠️ Fixing it is a change to core's
+  `Observation` and belongs there, not in a filter in the server.
+- **`Positions` is in memory only.** Every log is lost on restart. The ledger is the eventual
+  home, and the shape is already right — the log is the truth and the estimate is a cache that
+  proves itself against it — but nothing persists.
+- **`min_separation` in `analysis/cohesion.py`**.
 - **A renderer inside a page**, if one earns it (§3). ⚠️ A CZML serializer, should a globe be
   built, belongs at the presentation boundary and nowhere else (note 33 §8).
+- **16 npm vulnerabilities (1 critical)** from the Next 13 / ESLint 8 floor.
+
+⚠️ Two gates in `navigation.js` are **not** on this list because they are not implementable:
+`cohesion-gate` waits on an experiment that is allowed to fail, and `no-forecast-method` waits
+on a decision that an honest forecast is possible at all — §6 states it may never lift.

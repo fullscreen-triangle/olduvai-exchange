@@ -1,4 +1,4 @@
-import { methodNotAllowed, fail, notImplemented, forward } from "@/lib/api/upstream";
+import { methodNotAllowed, fail, notImplemented, forward, Reason } from "@/lib/api/upstream";
 import { requireSession, authHeaders } from "@/lib/api/session";
 
 /**
@@ -167,19 +167,38 @@ export default async function handler(req, res) {
     return res.status(result.status).json(result.data);
   }
 
+  // ⚠️ An outage is reported as an outage, and never as a fact about the data.
+  //
+  // Reaching here with `upstream_unreachable` and reporting `no-observations` would render the
+  // headline "Nothing observed yet" — a claim about the log — when the truth is that nothing
+  // was asked. A participant with a hundred readings would be told they had none, and the
+  // failure would look like an honest epistemic limit, which is the most flattering possible
+  // lie about a deployment. The provider gates below describe things genuinely not built; a
+  // stopped server is not one of them.
+  const unreachable =
+    result.reason === Reason.UPSTREAM_UNREACHABLE || result.reason === Reason.UPSTREAM_TIMEOUT;
+
   // Sources with no `envKey` need no provider — they are blocked on ingestion instead, and
   // saying "no provider" for them would send someone to configure an API that does not exist.
-  const gate = spec.envKey
-    ? process.env[spec.envKey]
-      ? null
-      : "no-provider"
-    : source === "satellites"
-      ? "no-elements"
-      : "no-observations";
+  const gate = unreachable
+    ? "upstream-unreachable"
+    : spec.envKey
+      ? process.env[spec.envKey]
+        ? null
+        : "no-provider"
+      : source === "satellites"
+        ? "no-elements"
+        : "no-observations";
 
   return notImplemented(res, {
     blockedBy: gate ?? "no-observations",
-    note: spec.note,
+    // ⚠️ The source's own note explains why *this source* is hard, which is the wrong thing to
+    // say about an outage — it would read as the reason nothing is shown when the reason is
+    // that nothing was asked. The note is still worth having under a real gate, where it does
+    // explain the block.
+    note: unreachable
+      ? `${spec.label} readings are folded by olduvai-server, which did not answer. This is an outage, not a statement about what has been observed.`
+      : spec.note,
     // ⚠️ The gate is the *fallback*, reached when upstream is unreachable or erroring — not
     // the default path any more. Keeping it means a dead server degrades to an honest "not
     // available" instead of a stack trace, which is the same promise the page already makes.

@@ -1,5 +1,5 @@
 import { authHeaders, requireSession } from "@/lib/api/session";
-import { fail, forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
+import { fail, forward, methodNotAllowed, notImplemented, Reason } from "@/lib/api/upstream";
 
 /**
  * Process views: foreman, transport, payments, monitoring, knowledge graph, predictions.
@@ -98,9 +98,21 @@ export default async function handler(req, res) {
   const result = await forward(spec.path, { headers: authHeaders(req) });
 
   if (!result.ok) {
+    // ⚠️ An outage is not a gate, and reporting it as one states something false about the
+    // participant's own record. `foreman` is live upstream now, so a failure here usually means
+    // the server is down — and `no-participant-record` would render "Nothing has been recorded
+    // yet", telling someone with a full record that they have none. The other five stages are
+    // genuinely unbuilt and still reach their own gate, because for them the 502 *is* the
+    // reason: there is no route upstream to answer.
+    const unreachable =
+      result.reason === Reason.UPSTREAM_UNREACHABLE || result.reason === Reason.UPSTREAM_TIMEOUT;
+
     return notImplemented(res, {
-      blockedBy: spec.blockedBy,
-      note: spec.note,
+      blockedBy: unreachable ? "upstream-unreachable" : spec.blockedBy,
+      note: unreachable
+        ? `${spec.label} is computed by olduvai-server, which did not answer. This is an outage, not a statement about your record.`
+        : spec.note,
+      upstream: result.reason,
     });
   }
 

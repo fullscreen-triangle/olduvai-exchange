@@ -50,6 +50,10 @@ export default async function handler(req, res) {
   // "we do not know where you are, to within 200 km" is a result. Gating on emptiness here
   // would replace that honest number with a 503 and make the two indistinguishable.
   if (!result.ok) {
+    // ⚠️ `upstream_error` lands here too — a live server answering 500 is not the same as one
+    // that is down, and both are reported under this gate because from a participant's side the
+    // consequence is identical: the fold did not run. `upstream` carries which it was, so the
+    // distinction survives for whoever is reading logs rather than the page.
     return notImplemented(res, {
       blockedBy: "upstream-unreachable",
       upstream: result.reason,
