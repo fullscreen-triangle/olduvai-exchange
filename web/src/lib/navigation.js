@@ -258,6 +258,25 @@ export const GATES = {
       "The assistant's base model runs locally through Ollama, so that what you describe about your consignment stays on your machine. Ollama is not running, or has no model installed.",
     reference: "notes/31-dashboard-design.md item 1",
   },
+  /**
+   * ⚠️ Separated from `no-model` after a live run reached it. The model was installed and
+   * answering; one stage simply ran past 180 seconds.
+   *
+   * ⭐ Sharing `no-model` looked harmless and was not: it told someone whose machine is slow
+   * to install a model they already have, which is a remedy that cannot work and gives no
+   * clue why. A gate is read as a diagnosis, so a gate that names the wrong cause costs more
+   * than a vague one.
+   *
+   * Measured cause on the machine that produced it: Ollama running on CPU with no GPU share,
+   * at roughly six tokens per second. That is a fact about the deployment rather than about
+   * this codebase, which is why the detail describes it instead of promising a fix here.
+   */
+  "model-too-slow": {
+    title: "The model is too slow to finish",
+    detail:
+      "The assistant's base model is installed and answering, but one stage ran past the time a single request allows. This is a property of where the model is running rather than of what was asked — on a machine without GPU acceleration each stage takes minutes.",
+    reference: "notes/31-dashboard-design.md item 1",
+  },
   "no-provider": {
     title: "No provider configured",
     detail:

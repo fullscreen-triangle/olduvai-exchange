@@ -35,8 +35,12 @@ const MODEL = process.env.OLLAMA_MODEL ?? null;
  * generation, and on modest hardware a large model can spend a minute before emitting a
  * token. A timeout tight enough to feel responsive would turn "your machine is slow" into
  * "the assistant is broken", which is both wrong and unactionable.
+ *
+ * ⭐ Exported because `pipeline.js` quotes it to a participant when explaining why an answer
+ * was capped, and a number stated in prose that no longer matches the code is worse than no
+ * number at all.
  */
-const TIMEOUT_MS = 180_000;
+export const TIMEOUT_MS = 180_000;
 /** The probe must be fast — it runs on page load to decide what to render. */
 const PROBE_TIMEOUT_MS = 1500;
 
@@ -103,6 +107,49 @@ export async function probe() {
 }
 
 /**
+ * ⭐ What this machine was last observed to generate at, per model. Never probed.
+ *
+ * ⚠️ **The probe that used to live here was the wrong idea, and measurement proved it.** It
+ * sent a tiny prompt and read the rate off the reply. Two runs against a cold 2 GB model:
+ * `ms: 20011` then `ms: 94568`, both returning "not measurable" as their own timeouts expired
+ * during the model load — after which the pipeline judged a machine that had already been
+ * seen doing 9.7 tok/s to be unmeasurable, and degraded on that basis. The probe cost more
+ * than the composition it was deciding about, and paid for it in the participant's wait.
+ *
+ * ⭐ So nothing is probed. `generate` reports the rate every call achieves, `remember` stores
+ * it, and this reads it back. The first question of a process runs without a measurement and
+ * takes the safe path; from the second on, the decision rests on the real thing rather than
+ * on a proxy for it.
+ *
+ * ⚠️ Process-local and deliberately not persisted. A rate is a property of this machine under
+ * its current load, and a figure cached to disk would outlive the conditions that produced it
+ * — a laptop measured on mains power would be trusted after it moved to battery and a
+ * different model was pulled. Losing it on restart costs one degraded answer.
+ */
+const RATES = new Map();
+
+/** Record what a call achieved. Called by `generate`; a `null` rate is ignored, not stored. */
+export function remember(model, tokensPerSecond) {
+  if (model && typeof tokensPerSecond === "number" && tokensPerSecond > 0) {
+    RATES.set(model, tokensPerSecond);
+  }
+}
+
+/**
+ * The remembered rate for a model.
+ *
+ * Returns `{ ok, tokensPerSecond }`. ⚠️ `ok: false` means *not yet observed*, not *slow* — but
+ * the caller treats it as slow anyway, because being wrong that way costs a check stage and
+ * being wrong the other way costs the whole answer.
+ */
+export function throughput({ model } = {}) {
+  const rate = model ? RATES.get(model) : undefined;
+  return rate === undefined
+    ? { ok: false, tokensPerSecond: null }
+    : { ok: true, tokensPerSecond: rate };
+}
+
+/**
  * One generation.
  *
  * `stream: false` because these responses are assembled by the pipeline before anything is
@@ -143,5 +190,30 @@ export async function generate({
   });
 
   if (!r.ok) return r;
-  return { ok: true, text: r.data?.response ?? "", model };
+
+  // ⭐ Every generation is also a measurement, at no cost. See `observedRate` and `RATES`.
+  const rate = observedRate(r.data);
+  remember(model, rate);
+
+  return { ok: true, text: r.data?.response ?? "", model, tokensPerSecond: rate };
+}
+
+/**
+ * ⭐ The tokens-per-second a call just achieved, or `null` if Ollama did not report it.
+ *
+ * ⚠️ This exists because measuring separately turned out to cost more than the thing it was
+ * measuring. `throughput()` above sends its own tiny prompt, and on a cold 2 GB model two
+ * measured runs spent 20s and then 94s failing to return before their timeouts — while a warm
+ * run of the same model reported 9.7 tok/s in a fraction of that. The model load, not the
+ * machine, was the expense, and no probe can avoid paying it once.
+ *
+ * So the rate is read off work that had to happen anyway. `eval_count` and `eval_duration`
+ * cover generation only — Ollama reports `load_duration` separately — so this is the
+ * steady-state rate, which is exactly the quantity a decision about the *next* call needs.
+ */
+export function observedRate(data) {
+  const count = data?.eval_count;
+  const ns = data?.eval_duration;
+  if (!count || !ns) return null;
+  return count / (ns / 1e9);
 }

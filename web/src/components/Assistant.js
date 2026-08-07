@@ -19,6 +19,16 @@ import { useEffect, useState } from "react";
  * exchange already refuses to present a value without its provenance; the same standard
  * applies to prose. It is collapsed by default because most people will not want it, and one
  * line stating the model that answered is visible without expanding anything.
+ *
+ * # ⭐ Progress is shown while it runs, and it is not the answer arriving early
+ *
+ * The pipeline is slow — six sequential model calls, 291s in one measured run on modest
+ * hardware. This component reads the reply as a stream and names the stage currently running.
+ *
+ * ⚠️ That is a report on the machinery, not a preview of the output. `lib/ai/pipeline.js`
+ * withholds the draft until its `check` stage has scored it, on the grounds that an answer
+ * which has already been read cannot be unread, and nothing here weakens that: no prose
+ * reaches this component before the terminal line, and the stage list carries none.
  */
 export default function Assistant({ placeholder, className = "" }) {
   const router = useRouter();
@@ -43,19 +53,61 @@ export default function Assistant({ placeholder, className = "" }) {
     };
   }, [router.pathname]);
 
+  /**
+   * ⭐ Ask, and read the reply as it arrives rather than all at once.
+   *
+   * ⚠️ The measured pipeline takes minutes on modest hardware — 291s in one live run. Awaiting
+   * a single `r.json()` meant this component set `pending` once and then did nothing for the
+   * whole of that, rendering the word "Thinking" and no other signal. A participant who
+   * concludes from that that the page has hung is reading it correctly; the interface was
+   * wrong, not their inference.
+   *
+   * ⚠️ What arrives here is progress, never a partial answer. `pages/api/assistant/ask.js`
+   * sends stage records only, and the answer appears in one piece on the terminal line, after
+   * the pipeline's own `check` stage has scored it.
+   */
   const ask = async (message) => {
-    setResult({ status: "pending", message });
+    setResult({ status: "pending", message, stages: [] });
     try {
       const r = await fetch("/api/assistant/ask", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message, agent: router.pathname }),
       });
-      const body = await r.json();
-      setResult(
-        body.ok
-          ? { status: "ready", message, data: body.data }
-          : { status: "blocked", message, body }
+
+      // ⚠️ A validation failure is still plain JSON, because it is decided before any model
+      // runs. Content type is what distinguishes them — not the status, which is 200 for a
+      // stream whatever the pipeline goes on to conclude.
+      if (!r.headers.get("content-type")?.includes("ndjson")) {
+        const body = await r.json();
+        setResult({ status: "blocked", message, body });
+        return;
+      }
+
+      await readStream(r, (event) => {
+        if (event.kind === "stage") {
+          // ⭐ Replace by id rather than append: a stage emits `running` and then `done`, and
+          // appending both would show every stage twice, the second time as a duplicate that
+          // contradicts the first.
+          setResult((prev) =>
+            prev?.status !== "pending"
+              ? prev
+              : { ...prev, stages: withStage(prev.stages, event) }
+          );
+        } else if (event.kind === "result") {
+          setResult(
+            event.body?.ok
+              ? { status: "ready", message, data: event.body.data }
+              : { status: "blocked", message, body: event.body }
+          );
+        }
+      });
+
+      // ⚠️ A stream that ends without a `result` line is a truncated response, not an answer.
+      // Left alone the view would sit on the last stage it saw for ever, which looks exactly
+      // like a slow stage and is the failure this whole change exists to make visible.
+      setResult((prev) =>
+        prev?.status === "pending" ? { status: "truncated", message } : prev
       );
     } catch {
       setResult({ status: "offline", message });
@@ -84,9 +136,10 @@ export default function Assistant({ placeholder, className = "" }) {
           aria-busy={result.status === "pending"}
         >
           <p className="mb-2 text-[11px] uppercase tracking-widest text-muted/70">
-            {result.status === "pending" && "Thinking"}
+            {result.status === "pending" && "Working"}
             {result.status === "ready" && "Answer"}
             {result.status === "offline" && "Not reachable"}
+            {result.status === "truncated" && "Interrupted"}
             {result.status === "blocked" && (gate?.title ?? "Unavailable")}
           </p>
 
@@ -101,6 +154,12 @@ export default function Assistant({ placeholder, className = "" }) {
             </>
           ) : (
             <p className="text-sm leading-relaxed text-light/90">{result.message}</p>
+          )}
+
+          {/* ⭐ The question stays on screen above this, so the two read together: what was
+              asked, and how far the pipeline has got with it. */}
+          {result.status === "pending" && (
+            <Progress declared={status?.stages ?? []} stages={result.stages} />
           )}
 
           {result.status === "blocked" && (
@@ -128,9 +187,129 @@ export default function Assistant({ placeholder, className = "" }) {
               The application server did not respond, so this was not sent anywhere.
             </p>
           )}
+
+          {/* ⚠️ Distinct from `offline`, and the distinction matters: this request *was* sent
+              and the pipeline may well have been part-way through it. Saying "not reachable"
+              here would tell someone their question never left the browser when it did. */}
+          {result.status === "truncated" && (
+            <p className="mt-4 text-sm leading-relaxed text-muted">
+              The connection ended before an answer arrived. The work may have been part-way
+              through; nothing was recorded either way.
+            </p>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Read an NDJSON response, calling `onEvent` per line.
+ *
+ * ⚠️ Lines are reassembled across chunk boundaries rather than parsed per chunk. A network
+ * chunk is not a line — a stage record can and does arrive split in two — and parsing chunks
+ * directly works right up until a message is long enough to straddle the boundary, which is
+ * the point at which it starts silently dropping progress.
+ */
+async function readStream(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    // The last element is whatever came after the final newline: either an empty string or a
+    // partial line. Either way it is not ready, so it stays in the buffer.
+    buffer = lines.pop() ?? "";
+
+    for (const raw of lines) {
+      if (!raw.trim()) continue;
+      try {
+        onEvent(JSON.parse(raw));
+      } catch {
+        // ⚠️ A malformed line is skipped rather than thrown. Progress is a courtesy on this
+        // side too, and taking down a request that is still producing an answer would be a
+        // worse outcome than one missing step in the list.
+      }
+    }
+  }
+}
+
+/**
+ * Fold one stage event into the list, replacing any earlier record of the same stage.
+ *
+ * ⭐ Order is arrival order, and `refine` therefore lands at the end where it belongs — it is
+ * not in the declared stage list at all, because it only runs when `check` failed.
+ */
+function withStage(stages, event) {
+  const at = stages.findIndex((s) => s.id === event.id);
+  if (at === -1) return [...stages, event];
+  const next = [...stages];
+  next[at] = event;
+  return next;
+}
+
+/**
+ * The pipeline, as it runs.
+ *
+ * ⭐ Renders the stages that have not started yet as well as the ones that have, which is why
+ * it takes the declared list from `/api/assistant/status` rather than only the events seen so
+ * far. A list that grows one line at a time says nothing about how much is left; the whole
+ * point of showing progress on a five-minute request is that the participant can see the end
+ * of it.
+ *
+ * ⚠️ Deliberately no percentage and no time estimate. The stages are not equal in length —
+ * measured, they ran between 40s and 79s and one of them was skipped in 0ms — so any bar drawn
+ * over them would be a made-up number presented with more confidence than the thing it
+ * describes. Naming the stage that is running is the honest version of the same information.
+ */
+function Progress({ declared, stages }) {
+  const seen = new Map(stages.map((s) => [s.id, s]));
+  // Declared stages first, in pipeline order, then anything that ran but was not declared —
+  // which today means `refine`, and which must never be silently dropped: it fires precisely
+  // when the answer failed a check, so it is the least skippable minute of the whole run.
+  const rows = [
+    ...declared.map((d) => ({ ...d, event: seen.get(d.id) ?? null })),
+    ...stages
+      .filter((s) => !declared.some((d) => d.id === s.id))
+      .map((s) => ({ id: s.id, label: s.id, event: s })),
+  ];
+
+  return (
+    <ol className="mt-4 space-y-1.5">
+      {rows.map(({ id, label, event }) => {
+        const state = event?.state ?? "waiting";
+        const skipped = event?.degraded && event.ms === 0;
+
+        return (
+          <li key={id} className="flex items-baseline justify-between gap-4 text-[11px]">
+            <span
+              className={
+                state === "running"
+                  ? "text-light/90"
+                  : state === "done"
+                    ? "text-muted/80"
+                    : "text-muted/40"
+              }
+            >
+              {/* ⚠️ Every class here is written out in full. Tailwind scans source
+                  statically, so a class name built by interpolation is a class name that
+                  does not exist in the stylesheet. */}
+              {label}
+              {skipped && <span className="text-muted/50"> — skipped</span>}
+            </span>
+            <span className="shrink-0 text-muted/50">
+              {state === "running" && "running"}
+              {state === "done" && event.ms > 0 && `${Math.round(event.ms / 100) / 10}s`}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
