@@ -36,6 +36,8 @@
 
 import { CHECKS, STAGES, Tier } from "./stages";
 import { systemPrompt } from "./agents";
+import { plan as buildPlan } from "./plan";
+import { fetchAll } from "./sources";
 import * as hf from "./huggingface";
 import * as ollama from "./ollama";
 
@@ -145,15 +147,49 @@ const DIRECT_CAP_BELOW_TOK_PER_SEC = 8;
  * not the ledger, not append-only, not attributed, and not recomputable. The exchange has
  * exactly one record of what is true about a participant, and this is not it.
  */
-function memory(query, agent, onStage) {
+function memory(query, agent, onStage, facts = [], position = null) {
   return {
     query,
     agent,
+    /**
+     * ⭐ The participant's `Estimate` in structured form — the same read `facts` was rendered
+     * from, carried through for `lib/ai/plan.js`.
+     *
+     * ⚠️ **Never composed into a prompt.** `facts` is the model's view of the position and this
+     * is the planner's; duplicating the position into the prompt in two shapes would give a
+     * stage two sources for one number. The only field read from it is `rests_on_observation`,
+     * which decides whether a coordinate may be sent to a weather service at all — and that is
+     * a routing decision, not something to state.
+     *
+     * ⚠️ `null` when the engine could not be reached. The planner treats that as "not measured",
+     * which is the safe direction: it declines the lookup rather than guessing a coordinate.
+     */
+    position,
     /** ⚠️ Not memory. An observer, held here only so `record` can reach it. */
     onStage,
     stages: [],
+    /**
+     * ⭐ What the engine actually knows, read before any stage ran. See `lib/ai/facts.js`.
+     *
+     * ⚠️ Distinct from `grounding`, and the distinction is the whole point. `grounding` is a
+     * *model's guess* at what would need to be true; this is measured state from
+     * `olduvai-core`. Merging them would let a stage that invented a requirement sit beside a
+     * computed sigma with equal standing, and `check` could no longer tell which was which.
+     */
+    facts,
     /** What `ground` retrieved, for `compose` to cite and `check` to test against. */
     grounding: [],
+    /**
+     * ⭐ What the *sources* returned — real readings from `lib/ai/sources.js`, distinct from
+     * `grounding` above.
+     *
+     * ⚠️ The distinction is the same one `facts` draws against `grounding`, one layer out.
+     * `grounding` is a model's notes about the question; this is material fetched from a named
+     * third party and stamped `asserted`. Merging them would let a sentence the model wrote sit
+     * beside a Comtrade tonnage with equal standing, and `compose` could no longer attribute
+     * either. Each entry is `{id, label, ok, lines, reason}`.
+     */
+    retrieved: [],
     draft: null,
     proposals: [],
   };
@@ -207,8 +243,8 @@ function announce(mem, event) {
  * `onStage` is optional and receives `{id, tier, model, state, ...}` as each stage starts and
  * finishes. Omitting it is the non-streaming path and changes nothing else.
  */
-export async function run({ query, agent, base, onStage }) {
-  const mem = memory(query, agent, onStage);
+export async function run({ query, agent, base, onStage, facts = [], position = null }) {
+  const mem = memory(query, agent, onStage, facts, position);
   const started = Date.now();
 
   // ⚠️ Checked before any stage runs. Without a base model there is no pipeline at all —
@@ -243,6 +279,98 @@ export async function run({ query, agent, base, onStage }) {
   // what it achieved on the way past, and every question after that is decided on an observed
   // rate. Nothing is announced here because nothing happens here.
   const speed = ollama.throughput({ model: base.model });
+
+  /**
+   * ⭐ **The one answer no model composes.**
+   *
+   * When the planner declines because the question spelled a commodity one letter away from one
+   * this exchange holds, its note *is* the answer: it names the spelling that works and the list
+   * that exists. Both facts come from `sources.js`'s own table. Nothing in the reply is a claim
+   * about a market, a price, or a buyer — so there is nothing here for a model to add, and,
+   * measured, a great deal for it to subtract.
+   *
+   * # ⚠️ The measurement, because "the model garbles it" is too vague to act on
+   *
+   * Three consecutive live runs of the participant's own question — *"I have 3t of chamomille tea
+   * leaves, where can I sell them ?"* — with the note in the compose prompt, on this machine:
+   *
+   *   1. **7.8 s** — never mentions the spelling at all. The participant learns nothing.
+   *   2. **11.0 s** — correct: names "chamomile", asks them to ask again.
+   *   3. **9.1 s** — *"we have a known quantity of 3 tonnes of chamomile tea leaves available"*,
+   *      converting the participant's own claim into an inventory record this exchange holds.
+   *
+   * An earlier run inverted the note outright, writing *"The exchange does not hold trade data
+   * for 'chamomile'"* — the opposite of what it was handed.
+   *
+   * ⚠️ **Wording will not fix this, and two rounds of A/B testing establish that rather than
+   * assume it.** The same note scored 3/3 in an isolated prompt and 1/3 live; a terser wording
+   * inverted once and invented *"local herbal suppliers or health food stores"*. The variable is
+   * not the sentence, it is the prompt around it — the same prompt-size effect measured twice
+   * before on other payloads, where this model reproduces the *shape* of what it is handed and
+   * its qualifiers not at all.
+   *
+   * ⭐ So this is not a shortcut for latency, though it is also that. It is the same rule the
+   * rest of the file follows: a figure a participant will act on does not pass through the model.
+   * "Spell it 'chamomile'" is such a figure. Routing deterministic text through a stage measured
+   * to corrupt it two times in three buys nothing and costs the answer.
+   *
+   * ⚠️ Placed before the shape is chosen, because a spelling mismatch is answerable at any
+   * throughput — the staged path would compose it just as unreliably, and gating on speed here
+   * would make the answer depend on how fast the machine happened to be.
+   *
+   * ⚠️ The degradation is reported, not hidden: `ground` is recorded as the stage that ran, the
+   * trace says `shape: "planner"`, and `compose` appears nowhere — so the view cannot present
+   * this as an answer a model wrote and checked.
+   */
+  const declined = await buildPlan({
+    query: mem.query,
+    // ⚠️ `null` deliberately. On the staged path `ground` passes `understand`'s output here, but
+    // that stage has not run yet and this check must not wait for it — the near-miss is decided
+    // from the participant's own words, which are complete before any model reads them. A
+    // spelling this planner can see now does not become visible later.
+    understanding: null,
+    base,
+    position: mem.position,
+  });
+  if (declined.via === "spelling") {
+    mem.planNote = declined.note;
+    mem.planVia = declined.via;
+    mem.retrieved = [];
+    record(mem, "ground", {
+      tier: Tier.BASE,
+      // ⚠️ `null` — no model ran. Naming one against a stage it did not run is the fabricated
+      // trace entry this file rejects on the `direct` path for the same reason.
+      model: null,
+      ms: 0,
+      ok: true,
+      // ⚠️ `degraded`, because sources were available and none was consulted. That is exactly
+      // what happened, and the participant is entitled to see it said plainly rather than infer
+      // it from an answer that mentions no figures.
+      degraded: true,
+      detail: declined.note,
+    });
+    return {
+      ok: true,
+      answer: declined.note,
+      readings: readingsFor(mem),
+      proposals: mem.proposals,
+      trace: {
+        stages: mem.stages,
+        ms: Date.now() - started,
+        agent: mem.agent.id,
+        domain: mem.agent.domain,
+        // ⭐ A third shape, named rather than folded into `direct`. The two existing shapes both
+        // end in a model call; this one does not, and a view that could not tell them apart would
+        // show "composed in one call" over prose no call composed.
+        shape: "planner",
+        tokensPerSecond: speed.ok ? speed.tokensPerSecond : null,
+        specialist: null,
+        specialistNote: "No model was called: the answer is the planner's own, verbatim.",
+        checks: null,
+      },
+    };
+  }
+
   const staged = speed.ok && speed.tokensPerSecond >= STAGED_MIN_TOK_PER_SEC;
 
   if (!staged) {
@@ -306,6 +434,20 @@ export async function run({ query, agent, base, onStage }) {
       continue;
     }
 
+    // ⭐ **Retrieval, before the model call that summarises it.**
+    //
+    // `stages.js` has always described this stage as *"Retrieve reference material that bears
+    // on the question"* and it retrieved nothing — so the model was asked to *speculate* about
+    // what would need to be true, and `compose` received the speculation as though it were
+    // material. Asked where to sell 3 tonnes of chamomile, the only concrete thing in the
+    // prompt was the participant's coordinates, so the answer was about the coordinates.
+    //
+    // ⚠️ The stage is *completed*, not replaced. It keeps its place in `STAGES`, its tier, its
+    // token cap, and its own prompt; what changes is that the prompt now has real readings in
+    // it. `notes/31` line 4 asked for this and lines 560–639 supplied a working keyless
+    // provider — nothing here is a new architecture.
+    if (s.id === "ground") await retrieve(mem, base);
+
     begin(mem, s.id, { tier: Tier.BASE, model: base.model });
     const r = await ollama.generate({
       model: base.model,
@@ -321,8 +463,12 @@ export async function run({ query, agent, base, onStage }) {
       model: base.model,
       ms: Date.now() - t0,
       ok: r.ok,
-      degraded: false,
-      detail: r.ok ? null : r.reason,
+      // ⚠️ A ground stage that retrieved nothing is `degraded`, in the same sense a missing
+      // specialist is: it ran and produced less than it should have. Before this, "retrieved
+      // nothing" and "retrieved four sources" rendered identically, so a participant could not
+      // tell an answer resting on Comtrade from one resting on the model's own recollection.
+      degraded: s.id === "ground" && r.ok ? !mem.retrieved.some((x) => x.ok) : false,
+      detail: r.ok ? (s.id === "ground" ? retrievalDetail(mem) : null) : r.reason,
     });
 
     if (!r.ok) {
@@ -386,6 +532,9 @@ export async function run({ query, agent, base, onStage }) {
   return {
     ok: true,
     answer: mem.draft ?? "",
+    // ⭐ The figures as the sources gave them. See `readingsFor` — the model's prose is not a
+    // trustworthy carrier of numbers on this hardware, so the numbers travel beside it.
+    readings: readingsFor(mem),
     // ⚠️ Always empty for now. Extraction is not implemented, and returning a plausible
     // proposal that nothing on the Rust side would accept is worse than returning none.
     // See `notes/29` and `accept_proposal` in `crates/olduvai-wasm/src/lib.rs`.
@@ -430,6 +579,13 @@ export async function run({ query, agent, base, onStage }) {
  * second place for that rule to be forgotten, and it would be forgotten in the path that has
  * no checker to catch it.
  *
+ * ⭐ It is called with `{ lean: true }`, and that does not weaken the paragraph above. `lean`
+ * is an option on the *same* prompt: every rule is emitted on both shapes, stated in one line
+ * here instead of three. Nothing is conditional on the path except how much prose each rule
+ * gets. Measurement forced it — the full prompt is ~1005 tokens against ~240 of data, and at
+ * that size this machine's model returned an answer containing none of the retrieved figures
+ * and an invented marketplace. See `prompts.compose` for the numbers.
+ *
  * ⭐ **`specialise` is kept, and that is not an inconsistency.** The measurement this path
  * branches on is *local* tokens per second, and `specialise` is the one stage that leaves the
  * machine — it is an `hf.infer` call whose cost is a network round trip. Dropping it here
@@ -437,6 +593,42 @@ export async function run({ query, agent, base, onStage }) {
  * The slower the local model is, the *more* worth having a remote specialist is.
  */
 async function direct({ mem, system, base, speed, specialist, started }) {
+  // ⭐ **Retrieval runs here too, and that is not a contradiction of what this path is for.**
+  //
+  // ⚠️ This path exists to spend fewer *model* calls on a machine measured too slow to afford
+  // five. Retrieval is not a model call: `lib/ai/plan.js` resolves a named commodity by table
+  // lookup, and `fetchAll` issues concurrent HTTP requests to four different hosts, bounded at
+  // 6 s each. None of it queues behind the single loaded Ollama model, so it does not lengthen
+  // the thing this path is shortening.
+  //
+  // ⚠️ Leaving it out was the alternative and it fails plainly: **the first question after any
+  // server restart takes this path**, so the participant's first question would be the one
+  // answered with no sources at all — and they have no way to tell it apart from a question
+  // that had none to find. Withholding retrieval to save time it does not cost would make the
+  // most likely answer the worst one.
+  //
+  // ⚠️ The planner may still call the model when nothing matches. That is the one case where
+  // this does spend a call — bounded at `PLAN_TOKEN_CAP`, and only for a question that asked
+  // for external context and named nothing recognisable.
+  const tg = Date.now();
+  begin(mem, "ground", { tier: Tier.BASE, model: null });
+  await retrieve(mem, base);
+  record(mem, "ground", {
+    tier: Tier.BASE,
+    // ⚠️ `null`, not `base.model`. On this path no model summarised the readings — they go to
+    // `compose` verbatim. Naming a model against a stage it did not run would put a fabricated
+    // step in the trace, and the trace is the only place the two shapes can be told apart.
+    model: null,
+    ms: Date.now() - tg,
+    ok: true,
+    // ⚠️ `degraded` on this path means "sources were consulted and none answered", the same
+    // sense as in the staged loop. It does NOT mark the missing summarisation step — that is
+    // what `shape: "direct"` and the `compose` record already say, and saying it twice would
+    // put the fast path's normal behaviour in the view's "what was lost" list.
+    degraded: !mem.retrieved.some((x) => x.ok),
+    detail: retrievalDetail(mem),
+  });
+
   // ⭐ See `DIRECT_COMPOSE_CAP`. On a machine seen generating too slowly to finish, an uncapped
   // answer is not a longer answer — it is a timeout.
   //
@@ -487,10 +679,15 @@ async function direct({ mem, system, base, speed, specialist, started }) {
   const r = await ollama.generate({
     model: base.model,
     system,
-    // `mem.understanding` and `mem.grounding` are unset, and `prompts.compose` already renders
-    // that as "(none)" and "(nothing retrieved)" — the honest rendering, and one the staged
-    // path can reach too when a stage returns nothing.
-    prompt: prompts.compose(mem),
+    // ⭐ `lean` — the same rules, stated once each. See `prompts.compose`.
+    //
+    // ⚠️ `mem.understanding` and `mem.grounding` are unset on this path, and the full prompt
+    // renders that as the headings "Your reading of it: (none)" and "What is known and unknown:
+    // (nothing retrieved)". That is honest, and on the staged path those headings carry real
+    // content — but here they are four lines asserting that nothing is known, printed directly
+    // above the retrieved figures. Measured, the full prompt on this machine dropped every
+    // figure and invented a marketplace in their place; the lean one kept six of eight.
+    prompt: prompts.compose(mem, { lean: true }),
     temperature: 0.2,
     ...(capped ? { maxTokens: DIRECT_COMPOSE_CAP } : {}),
   });
@@ -550,6 +747,11 @@ async function direct({ mem, system, base, speed, specialist, started }) {
   return {
     ok: true,
     answer: mem.draft ?? "",
+    // ⭐ **Most load-bearing on this path**, which is the only one this machine reaches. There
+    // is no `check` here to score the draft, so the readings beside the prose are the
+    // participant's only way to see what the sources actually said — and, measured, the only
+    // reason a live wrong-commodity answer was caught at all. See `readingsFor`.
+    readings: readingsFor(mem),
     proposals: mem.proposals,
     trace: {
       stages: mem.stages,
@@ -592,6 +794,135 @@ function stripPreamble(text) {
   return announces.test(first.trim()) ? rest.join("\n").trim() : trimmed;
 }
 
+/**
+ * ⭐ **Plan the lookups and run them.** Writes `retrieved`, `planNote` and `planVia` onto memory.
+ *
+ * ⚠️ One function, called from both shapes. The staged path calls it inside `ground`; `direct`
+ * calls it before composing. Inlining it twice would let the two paths retrieve differently, and
+ * the difference would surface as "the first question after a restart answers differently from
+ * every question after it" — which is the hardest kind of divergence to attribute, because both
+ * answers are individually plausible.
+ *
+ * ⚠️ Never throws. `fetchSource` already converts a failed source into `{ok: false, reason}`,
+ * and a planner that cannot reach the model returns an empty plan. A source that did not answer
+ * is reported to `compose` as a source that did not answer; it does not fail the stage.
+ */
+async function retrieve(mem, base) {
+  const p = await buildPlan({
+    query: mem.query,
+    understanding: mem.understanding,
+    base,
+    position: mem.position,
+  });
+  mem.retrieved = p.plan.length ? await fetchAll(p.plan) : [];
+  mem.planNote = p.note;
+  mem.planVia = p.via;
+}
+
+/**
+ * The retrieved readings, flattened and attributed, for a prompt.
+ *
+ * ⚠️ Each block is prefixed with its source name. Without that, four sources' lines run
+ * together into one undifferentiated list and `compose` — instructed to name its source —
+ * attributes a Comtrade tonnage to PubChem, which is a fabricated citation wearing a real
+ * number.
+ */
+function retrievedLines(m) {
+  const out = [];
+  for (const r of m.retrieved ?? []) {
+    if (!r.ok) continue;
+    out.push(`From ${r.label}:`);
+    for (const l of r.lines) out.push(`  ${l}`);
+  }
+  return out;
+}
+
+/**
+ * ⭐ The readings as retrieved, for the participant to read beside the answer.
+ *
+ * # ⚠️ Why the figures must reach the reader without passing through a model
+ *
+ * Measured failures of the prose as a carrier, on this hardware:
+ *
+ *   - Under the full prompt it dropped **every** figure and wrote *"marketplaces such as
+ *     eBay"* — a seller invented outright, in place of the eight countries it was handed.
+ *   - Told in the prompt, in the line itself, that the countries are "NOT the world's largest
+ *     importers", it wrote *"major markets"* anyway — the exact phrase the rule forbids.
+ *   - Under the lean prompt it kept the tonnages but dropped that qualifier, so a partial
+ *     sample of reporting countries read as a ranking.
+ *
+ * ⭐ The pattern is that a 3b model at ~6 tokens/second reproduces the *shape* of a reading
+ * reliably and its caveats not at all. Adding a tenth rule made this worse, not better, which
+ * is what ended the prompt-engineering approach.
+ *
+ * ⚠️ **It does not resample the numbers, and an earlier version of this comment said it did.**
+ * That claim came from comparing a live answer against a reading fetched under a *different* HS
+ * code, and it was wrong: in the run that produced these readings every figure was copied
+ * exactly. The correction matters because it moves the fault — the numbers were right and the
+ * *commodity* was wrong, which is a planner defect (see `commodityIn` in `plan.js`) that no
+ * amount of care in this file would have caught. It is also why these lines earn their place:
+ * they are what made the real defect visible.
+ *
+ * ⚠️ So the answer prose is no longer the only carrier. These lines are returned verbatim
+ * beside it, exactly as the source produced them, qualifiers included — which is the one form
+ * of the numbers nothing can reword. `README.md` excludes AI from deterministic synthesis; a
+ * figure that a participant will price against belongs on the deterministic side of that line,
+ * and routing it through a language model is what put it on the wrong side.
+ *
+ * ⭐ This does not remove the readings from the prompt. The model still sees them and still
+ * writes the prose, because the prose is what answers the question — but its numbers can now
+ * be checked against the source by the person reading them, rather than taken on trust.
+ */
+function readingsFor(mem) {
+  const out = (mem.retrieved ?? []).map((r) => ({
+    label: r.label,
+    ok: r.ok,
+    // ⚠️ Verbatim. Not summarised, not reformatted, not truncated — the caveats are embedded
+    // in these strings by `sources.js` precisely so that they cannot be separated from the
+    // figures they qualify, and any processing here would be the separation happening one
+    // layer further out.
+    lines: r.ok ? r.lines : [],
+    reason: r.ok ? null : (r.reason ?? null),
+  }));
+
+  // ⭐ **A refusal to look anything up is a reading.** It is the shortest one this file can
+  // return and the most easily lost: `compose` is now told to state the planner's reason, but
+  // "told to" is precisely the guarantee the rest of this function exists to replace. If the
+  // model drops it, the participant is left with an answer about a crop nobody looked up and
+  // no way to see that nobody looked.
+  //
+  // ⚠️ `ok: false` rather than `ok: true` with lines, so the view renders it under "did not
+  // answer" — which is what happened. Presenting a non-lookup in the same shape as a Comtrade
+  // reading would be the more misleading of the two.
+  if (mem.planNote && !out.length) {
+    out.push({ label: "No source consulted", ok: false, lines: [], reason: mem.planNote });
+  }
+  return out;
+}
+
+/**
+ * What `ground` retrieved, in one sentence for the trace.
+ *
+ * ⭐ Names the sources that answered *and* the ones that did not, with their reason. A source
+ * that timed out and a source that had no data for the commodity are different facts, and a
+ * participant reading an answer that omits a market is entitled to know which one happened.
+ */
+function retrievalDetail(mem) {
+  const got = mem.retrieved.filter((x) => x.ok);
+  const missed = mem.retrieved.filter((x) => !x.ok);
+
+  if (!mem.retrieved.length) {
+    return mem.planNote ?? "No external source was consulted for this question.";
+  }
+
+  const parts = [];
+  if (got.length) parts.push(`Retrieved from ${got.map((x) => x.label).join(", ")}.`);
+  if (missed.length) {
+    parts.push(missed.map((x) => `${x.label} did not answer (${x.reason})`).join("; ") + ".");
+  }
+  return parts.join(" ");
+}
+
 /** Fold a stage's output into working memory. */
 function absorb(mem, id, text) {
   if (id === "understand") mem.understanding = text.trim();
@@ -620,7 +951,16 @@ const prompts = {
     [
       "Read the participant's message and state, briefly:",
       "1. What they are asking for.",
-      "2. Any quantities, with their units, and anything left without a unit.",
+      // ⚠️ "anything left without a unit" was previously the whole of item 2, and a live run
+      // showed what that teaches. Asked about "3t of chamomile tea leaves", the pipeline spent
+      // 42 s concluding it could not proceed because it did not know what "t" meant. It is
+      // tonnes. Naming a *genuinely* ambiguous quantity is useful; treating a standard
+      // abbreviation as unknowable is the "say nothing safely" failure this file rejects
+      // everywhere else, and it is worse than a wrong answer because it wastes the reader's
+      // time before refusing.
+      "2. Any quantities, with their units. ⚠️ Expand standard abbreviations yourself — t is",
+      "   tonnes, kg kilograms, ha hectares, m metres. Only flag a quantity as ambiguous if it",
+      "   genuinely could mean two different things here, and say which two.",
       "3. Whether answering needs the matching engine (which you do not have access to).",
       "",
       "Message:",
@@ -632,9 +972,53 @@ const prompts = {
       "Given this reading of the question:",
       m.understanding ?? "(none)",
       "",
-      "List what would have to be true, or known, to answer it well — and mark each item",
-      "as either something you know, or something only the exchange's records could tell you.",
-      "Do not answer the question yet.",
+      // ⚠️ The facts are shown here too, not only to `compose`. Without them this stage
+      // dutifully lists "the participant's position" as something only the records could
+      // supply — and `compose` then inherits a note saying the answer is unavailable while
+      // the answer sits two lines above it. One stage contradicting the other is worse than
+      // either being wrong alone, because `check` scores the draft and not the notes.
+      ...(m.facts?.length
+        ? [
+            "⭐ These are already known from the exchange's records — treat them as available,",
+            "not as gaps:",
+            ...m.facts,
+            "",
+          ]
+        : []),
+      // ⭐ The readings this stage just fetched. Its job changes shape when they are present:
+      // with material, it summarises what was found; without, it lists what is missing. Both
+      // are useful, and asking for the second when the first is available is what produced a
+      // "what would need to be true" list sitting on top of eight countries' import tonnages.
+      ...(retrievedLines(m).length
+        ? [
+            "⭐ These readings were just retrieved from external sources for this question.",
+            "They are asserted by those sources, not measured by this exchange:",
+            ...retrievedLines(m),
+            "",
+            "Summarise what these readings establish about the question, keeping every figure",
+            "and its unit. Then name what is still missing. Do not answer the question yet.",
+            "",
+          ]
+        : [
+            "List what would have to be true, or known, to answer it well — and mark each item",
+            "as either something you know, or something only the exchange's records could tell",
+            "you. Do not answer the question yet.",
+            "",
+          ]),
+      // ⚠️ Without this the stage speculates about our internals — a live run produced "we use
+      // a fixed coordinate function to compute addresses", which `compose` then handed to the
+      // participant as though it answered their question about selling tea. The model has no
+      // knowledge of this codebase, so anything it says about how the exchange works is
+      // invention, and it is the *most* damaging kind: it sounds like documentation.
+      //
+      // ⭐ Note the asymmetry with `compose`. There the rule is "do not explain the machinery";
+      // here it is "do not guess at it". Both are needed — a stage told only not to *repeat*
+      // internals will still generate them, and a later stage under token pressure will reach
+      // for whatever is in its notes.
+      "⚠️ Write only about the participant's situation. Do not describe or guess at how this",
+      "exchange works internally — you have not been told, so anything you write about its",
+      "mechanisms is invented. If something can only come from the exchange, name the missing",
+      "fact itself, not the machinery that would supply it.",
     ].join("\n"),
 
   specialise: (m) =>
@@ -645,32 +1029,271 @@ const prompts = {
       m.query,
     ].join("\n"),
 
-  compose: (m) =>
+  /**
+   * ⭐ `lean` states the same rules in one line each, for a machine too slow to read them twice.
+   *
+   * # ⚠️ Why a flag and not a second prompt
+   *
+   * The `direct` path's own doc argues against forking this prompt: a second one is a second
+   * place for the anti-fabrication clauses to be forgotten, in the path that has no checker to
+   * catch it. That argument still holds and this does not break it — there is one `compose`,
+   * one list of rules, and `lean` chooses how much prose each rule is stated in. A rule added
+   * below is added to both shapes or to neither.
+   *
+   * # ⭐ What was measured
+   *
+   * The full prompt is 4018 chars (~1005 tokens), of which **3050 chars is instruction and
+   * only 968 is the retrieved data**. Handed that prompt and a live Comtrade reading listing
+   * eight countries with tonnages, `llama3.2:latest` on this machine returned, in 39045 ms:
+   *
+   * > *"You can sell your chamomile tea leaves on online marketplaces such as eBay or
+   * > specialized platforms for herbal products…"*
+   *
+   * ⚠️ Every retrieved figure gone, and eBay — which appears in no source — invented in their
+   * place. Handed the identical readings under a 1507-char prompt it named six of the eight
+   * countries with their tonnages, in 21320 ms.
+   *
+   * ⭐ So the failure is prompt **size**, not wording. Each ⚠️ clause below was added to repair
+   * a real run, and every one of them is still true; but past roughly a thousand tokens on a
+   * 3b model they stop being read and start crowding out the figures they were written to
+   * protect. Adding a tenth rule made the answers worse, which is what prompted measuring.
+   *
+   * ⚠️ **`lean` is not clean, and must not be reported as a fix.** In the same measurement the
+   * lean prompt still dropped a figure's qualifier despite being told to copy it, corrupted one
+   * tonnage (388 → 863) and leaked a raw reporter code as "reporter 48". It is strictly better
+   * than losing every figure; it is not a model that can be trusted to restate a caveat. The
+   * durable answer is to stop asking a 3b model to carry qualifiers in prose at all — see the
+   * note on structural provenance — and this flag only buys room until then.
+   */
+  compose: (m, { lean = false } = {}) =>
     [
-      "Write the answer for the participant.",
+      // ⚠️ These three lines were added after a live run returned the *scaffolding* as the
+      // answer — a numbered "1. What they are asking for / 2. Quantities and units" list,
+      // followed by "What is known and unknown", verbatim from the stages below. The headings
+      // were being read as an output format rather than as inputs, which is an easy mistake to
+      // make when the sections are titled and the instruction to write prose is at the bottom.
+      "You are writing the final answer that a person will read. Reply with that answer only.",
+      ...(lean
+        ? []
+        : [
+            "⚠️ The sections below are your working notes. Do NOT reproduce their headings, do not",
+            "number your answer to match them, and do not describe your own reasoning process.",
+          ]),
       "",
       "Their question:",
       m.query,
       "",
-      "Your reading of it:",
-      m.understanding ?? "(none)",
-      "",
-      "What is known and unknown:",
-      ...(m.grounding.length ? m.grounding : ["(nothing retrieved)"]),
+      // ⭐ Measured state, first and clearly labelled, because the run that motivated all of
+      // this said "I don't know your position" while the number sat unread in `Estimate`.
+      // Facts precede the model's own notes deliberately: when the two disagree, the engine
+      // is right and the ordering should make that obvious rather than leave it to be inferred.
+      ...(m.facts?.length
+        ? [
+            "⭐ Known facts from the exchange's records. These are measured values from this",
+            "system, not guesses. Use them directly and state their units:",
+            ...m.facts,
+            "",
+          ]
+        : []),
+      // ⭐ **The retrieved readings, before the model's own notes about them.**
+      //
+      // ⚠️ Same ordering argument as `facts` above, and for a sharper reason: `grounding` is a
+      // 200-token summary the model wrote *of* this material, and a summary written under a
+      // token cap drops numbers. Handing `compose` only the summary is what made the earlier
+      // answers vague — the tonnages never survived the intermediate stage. So the source lines
+      // are passed through verbatim and the summary sits under them as context, not as a
+      // replacement.
+      ...(retrievedLines(m).length
+        ? [
+            ...(lean
+              ? ["⭐ Figures retrieved for this question. Use these and no others:"]
+              : [
+                  "⭐ Reference material retrieved from external sources for this question. These are",
+                  "real figures from the named sources. ⚠️ They are ASSERTED by those sources — this",
+                  "exchange did not measure them. Use them directly, keep their units, and name the",
+                  "source when you state a figure:",
+                ]),
+            ...retrievedLines(m),
+            "",
+            // ⚠️ **A caveat attached to a figure has to survive being restated, and measurement
+            // showed it does not on its own.** The Comtrade line says, in the line itself, that
+            // its countries are "the largest among the countries returned, NOT the world's
+            // largest importers" — written that way precisely so a summariser could not drop it.
+            // A live run compressed it anyway and wrote *"the implied import price across major
+            // markets"*: the caveat gone, and replaced by the exact claim it forbade.
+            //
+            // ⭐ That is not a formatting slip. "Major markets" is a ranking of participants in
+            // world trade that nothing computed — `README.md` excludes AI from ranking, and this
+            // is that exclusion being violated in prose rather than in code. The number was real,
+            // which is what makes the sentence expensive: a seller would price against it.
+            //
+            // ⚠️ So the rule is stated as a prohibition on *rewording*, not as "keep the caveat".
+            // A model told to keep a caveat keeps a shorter caveat. Told that the qualifier is
+            // part of the figure, it copies the phrase.
+            ...(lean
+              ? [
+                  "⚠️ Name the countries and their tonnages exactly as written above. Copy each",
+                  "figure's ⚠️ qualifier. Never write \"major markets\" or \"leading importers\".",
+                ]
+              : [
+                  "⚠️ A figure's qualifier is part of the figure. If a reading says its countries are",
+                  "not a global ranking, or that a price is not a market quote, copy that qualifier",
+                  "into your sentence in words as strong as the original. Never upgrade a qualified",
+                  "figure into a general claim — do not turn \"the countries returned\" into \"major",
+                  "markets\", \"leading importers\", or \"the biggest buyers\". If you cannot fit the",
+                  "qualifier, leave the figure out instead.",
+                ]),
+            "",
+          ]
+        : []),
+      // ⭐ **Why no source was consulted, when none was.**
+      //
+      // ⚠️ This used to go only into the trace, and the measured cost of that was severe. Asked
+      // *"I have 3t of chamomille tea leaves, where can I sell them?"*, the planner correctly
+      // declined — the spelling is one letter from `chamomile` and looking up the nearest match
+      // would have returned figures for the wrong crop. Its note said so, and named the spelling
+      // that would work. ⚠️ The note went to the trace, `compose` was handed nothing at all, and
+      // the model filled the vacuum: *"You can sell your chamomille tea leaves on the exchange's
+      // marketplace page"* — a page that does not exist.
+      //
+      // ⭐ So the note is prompt material, not diagnostics. When the planner declines, its reason
+      // **is** the answer to the question, and it is the one thing here the model could not have
+      // derived: only the planner knows which spelling this exchange holds. Handing `compose` an
+      // empty prompt and a fabrication rule does not produce that sentence; handing it the note
+      // does. This costs one line and closes the gap where the invention happened.
+      ...(m.planNote
+        ? [
+            "⚠️ No external source was consulted, for this reason. State this reason to the",
+            "participant in your answer — it is what they need to know, and it is not a note",
+            "about how the system works. Do not go looking for another explanation:",
+            `  ${m.planNote}`,
+            "",
+          ]
+        : []),
+      // ⚠️ A source that was consulted and failed is stated, not omitted. Silence would let the
+      // model write as though the market were unknown when in fact the lookup timed out.
+      ...(m.retrieved?.some((x) => !x.ok)
+        ? [
+            "⚠️ These sources were consulted and did not answer, so say nothing about what they",
+            "would have contained:",
+            ...m.retrieved.filter((x) => !x.ok).map((x) => `  ${x.label}: ${x.reason}`),
+            "",
+          ]
+        : []),
+      // ⚠️ On the `direct` path both of these are always empty, and the full prompt renders them
+      // as the literal headings "Your reading of it: (none)" and "What is known and unknown:
+      // (nothing retrieved)". That is four lines telling a model that nothing is known, directly
+      // above the figures it was just handed — the staged path needs the headings because they
+      // carry real content there, and this path pays for them without ever filling them.
+      ...(lean && !m.understanding ? [] : ["Your reading of it:", m.understanding ?? "(none)", ""]),
+      ...(lean && !m.grounding?.length
+        ? []
+        : ["What is known and unknown:", ...(m.grounding.length ? m.grounding : ["(nothing retrieved)"])]),
       ...(m.specialist
         ? ["", "A domain model's answer, to use where it is more precise than yours:", m.specialist]
         : []),
       "",
-      "Be direct and brief. Units on every quantity. Where the answer depends on records",
-      "you do not have, say so plainly rather than hedging the whole answer.",
+      // ⭐ From here down every rule below is preserved under `lean`, one line each, in the same
+      // order. None is dropped: each repairs a live failure recorded in the comment beside it,
+      // and a rule deleted here is a failure re-enabled on the only path this machine can run.
+      // What `lean` removes is the *second and third sentence* of each rule — the explanation of
+      // why it exists, which the comments hold anyway and which the model does not need.
+      ...(lean
+        ? [
+            "Rules:",
+            "- Be direct and brief. Answer the part you can; name a missing record once, and only",
+            "  where it blocks what they asked. Never decline the whole question over a partial gap.",
+            "- State every quantity's unit inline (3 tonnes, 30 metres). No separate \"Units:\" line.",
+            "- A known fact above is known. Do not doubt it, and do not close by listing your doubts.",
+            "- Never describe how this system works internally. If the exchange cannot do this yet,",
+            "  say that in one sentence and say what it would take.",
+            "- Invent nothing: no buyers, marketplaces, countries, grades, categories or numbers",
+            "  that are not written above, not even as an illustrative example.",
+          ]
+        : [
+            "Be direct and brief. Where the answer depends on records you do not have, say so",
+            "plainly rather than hedging the whole answer.",
+          ]),
       "",
+      // ⚠️ "Units on every quantity" used to stand here alone, and a live run showed how a
+      // true rule gets misread. `check` scores `unitful`, so the model started annotating every
+      // line — and produced "Units: degrees (latitude) and meters (longitude)". Longitude is not
+      // in metres. Asked to label everything, a 3b model will label the things that do not take
+      // labels, and it invents a unit rather than leave one out.
+      //
+      // ⭐ The rule was always about *consignment quantities* — note 30 §5.3's
+      // `{value, unit, source, precision}`, where a bare number is a value that cannot be
+      // recorded. Coordinates already carry their unit in the word "degrees". So the
+      // instruction now says where units belong and, as importantly, where they do not.
+      ...(lean
+        ? []
+        : [
+            "⚠️ Every quantity you state must carry its unit inline, in the sentence — 3 tonnes,",
+            "30 metres. Do not add a separate \"Units:\" line, and do not restate a unit that is",
+            "already part of the phrase. If you are unsure what unit something is in, use the",
+            "wording from the known facts above verbatim rather than choosing one.",
+            "",
+          ]),
+      // ⚠️ Added after a run that answered "where can I sell 3 tonnes of chamomile?" with a
+      // paragraph about how this system converts coordinates to addresses. That is `ground`'s
+      // notes leaking into the product: asked what would have to be true to answer well, it
+      // listed the machinery, and `compose` — having nothing better — paraphrased the
+      // machinery. `check` then passed it on all three axes, because it *is* grounded,
+      // bounded and hedged. The axes score the shape of an answer, not whether it was any use.
+      //
+      // ⭐ So the rule is stated here rather than added as a fourth axis: the participant is
+      // owed the state of *their* question, never a description of our internals. "This
+      // exchange cannot do that yet" is a complete and honest answer; a tour of the pipeline
+      // that reaches the same place is the same refusal with the reader's time spent on it.
+      ...(lean
+        ? []
+        : [
+            "⚠️ Never explain how this system works internally — not its stages, its models, its",
+            "coordinate handling, or how it computes anything. The person asked about their own",
+            "situation. If the honest answer is that the exchange cannot do this yet, say exactly",
+            "that in one sentence and say what it would take; do not substitute a description of",
+            "our machinery for the answer they asked for.",
+            "",
+          ]),
+      // ⚠️ Added after a run that stated the position correctly and then closed with "we do not
+      // know what position means in the context of the exchange or how the uncertainty is
+      // calculated". Both were in the facts it had just been given. The notes above mark things
+      // as unknown, and the model carries that hedge past the point where it stopped applying —
+      // which reads as the whole answer being unreliable, and costs the reader more than the
+      // caveat could ever be worth.
+      ...(lean
+        ? []
+        : [
+            "⚠️ A known fact above is known. Do not follow it with a sentence doubting it, and do",
+            "not close by listing what you are unsure of. Name a gap only where it blocks the",
+            "specific thing they asked for, and only once.",
+            "",
+          ]),
+      // ⚠️ Added after a run that answered "we cannot determine where to sell your tea without
+      // knowing the unit of measurement" — for a question that said 3t. Two failures compound
+      // there: a standard abbreviation treated as unknowable (see `understand`), and a partial
+      // gap used to refuse the whole question. The second is the one that makes the tool feel
+      // useless, because a refusal costs the reader the same wait as an answer.
+      ...(lean
+        ? []
+        : [
+            "⚠️ Answer the part you can. A missing record is a reason to say which part is missing,",
+            "never a reason to decline the whole question — if you can say something useful about",
+            "what they asked, say it, then name precisely what you would need to say more. Do not",
+            "restate facts that are irrelevant to their question merely because they are available.",
+            "",
+          ]),
       // ⚠️ Added after a live run produced a bulleted "Grade A / B / C" scheme this exchange
       // has never defined, wrapped in a disclaimer. The disclaimer is the part a reader
       // drops; the list is the part they keep. Stopping is a better answer than illustrating.
-      "⚠️ Do not illustrate with made-up examples. If you do not know this exchange's grades,",
-      "categories, thresholds, or codes, say that they are defined by the exchange and stop —",
-      "do not invent a plausible set to show what one might look like, even labelled as an",
-      "example. An invented list is remembered after the caveat around it is forgotten.",
+      ...(lean
+        ? []
+        : [
+            "⚠️ Do not illustrate with made-up examples. If you do not know this exchange's grades,",
+            "categories, thresholds, or codes, say that they are defined by the exchange and stop —",
+            "do not invent a plausible set to show what one might look like, even labelled as an",
+            "example. An invented list is remembered after the caveat around it is forgotten.",
+          ]),
     ].join("\n"),
 
   check: (m) =>
@@ -686,11 +1309,40 @@ const prompts = {
 
   refine: (m) =>
     [
-      `The draft failed these checks: ${(m.checkFailed ?? []).join(", ")}.`,
+      // ⚠️ The question comes first and was absent until a rewrite changed the subject. This
+      // stage only ever saw the draft, so "answer the same question" was an instruction it had
+      // no way to check itself against.
+      "The person asked:",
+      m.query,
+      "",
+      `A draft answer failed these checks: ${(m.checkFailed ?? []).join(", ")}.`,
       ...(m.checkFailed ?? []).map((k) => `- ${k}: ${CHECKS[k].detail}`),
       "",
+      // ⚠️ **The facts must be here.** Without them this stage was measured destroying a
+      // correct answer: a draft stating the participant's recorded position failed `grounded`,
+      // and `refine` — shown the failed axis and the draft but nothing the draft was grounded
+      // *in* — "fixed" it by deleting the position entirely and emitting "I don't know what
+      // grades, categories, thresholds or codes apply", borrowed from `compose`'s
+      // anti-fabrication clause. It had no way to tell a supported claim from an invented one,
+      // so it removed the only supported claim in the draft.
+      //
+      // ⭐ A stage asked to make an answer better must see the evidence the answer rests on.
+      // Otherwise "make it more grounded" and "say less" are the same instruction to it.
+      ...(m.facts?.length
+        ? [
+            "⭐ These facts are measured values from this system's records. They ARE grounded —",
+            "keep every one of them that the draft uses, and do not remove a claim merely",
+            "because it is specific:",
+            ...m.facts,
+            "",
+          ]
+        : []),
       "Rewrite it so it passes. Do not pad it, and do not add claims to compensate —",
       "if the fix is to say less, say less.",
+      "",
+      // ⚠️ Narrow, because the failure above was the rewrite answering a *different* question.
+      "⚠️ Answer the same question the draft answers. Fix how it is stated, never what it is",
+      "about — a rewrite that changes the subject has not passed the check, it has abandoned it.",
       "",
       // ⚠️ Added after a live run began its answer with "Here's a rewritten version of the
       // draft:". The participant never saw a draft and does not know a check ran; a stage

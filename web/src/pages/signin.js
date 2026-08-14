@@ -27,16 +27,26 @@ export default function SignIn() {
 
   const submit = async (e) => {
     e.preventDefault();
-    const email = new FormData(e.currentTarget).get("email");
+    const form = new FormData(e.currentTarget);
+    const email = form.get("email");
     setBusy(true);
     try {
-      // ⚠️ Only the email goes, and `/api/session` drops it after checking its shape. The
-      // password field is never read here — sending a credential to a route that cannot
-      // verify it would teach the habit of sending it, which is the habit that matters.
+      // ⚠️ The email goes and `/api/session` drops it after checking its shape.
+      //
+      // ⭐ The second field is an **invite phrase**, not a password, and the distinction is the
+      // whole reason it is safe to send. A password is a claim about who you are, and posting
+      // one to a route with nothing to verify it against is the theatre this page has always
+      // refused. A shared phrase is a claim about nothing — it identifies nobody and grants no
+      // standing; it only decides whether this deployment will open a working session at all.
+      // On a deployment with no phrase configured it is ignored entirely.
+      //
+      // ⚠️ So the habit this page was protecting still holds: no credential is sent, because
+      // this is not a credential. If a real identity service lands, the phrase does not become
+      // its password — it disappears, and this field goes with it.
       const r = await fetch("/api/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, invite: form.get("invite") || undefined }),
       });
       const body = await r.json().catch(() => null);
       setStatus(
@@ -93,12 +103,20 @@ export default function SignIn() {
             autoComplete="email"
             placeholder="you@example.com"
           />
+          {/* ⚠️ Labelled "Invite phrase", never "Password", and the hint says it plainly. A
+              field that looks like a password teaches that this is a login, and the entire
+              rest of this screen exists to say it is not. Left blank on a deployment that
+              requires none — the route ignores it there. */}
+          {/* ⚠️ `required={false}` matters: a local run configures no phrase, and a required
+              field would block the form on the one deployment that needs nothing. */}
           <Field
-            id="password"
-            label="Password"
+            id="invite"
+            label="Invite phrase"
             type="password"
-            autoComplete="current-password"
-            placeholder="••••••••"
+            autoComplete="off"
+            required={false}
+            placeholder="Leave blank if you were not given one"
+            hint="Not a password. It identifies nobody — it only decides whether this deployment opens a working session."
           />
           <SubmitButton disabled={busy}>
             {busy ? "Opening session…" : "Sign in"}

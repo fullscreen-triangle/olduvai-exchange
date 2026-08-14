@@ -32,6 +32,17 @@ pkg/
 *.pem
 *.key
 
+# ⚠️ Every one of the patterns above anchors `.local` at the END of the name, so a file
+# called `.env.local.example` matched NONE of them. `web/.env.local.example` was found
+# holding live Cesium, Mapbox, OpenWeatherMap, TomTom, HuggingFace, Gemini and OpenAI
+# credentials — untracked, but one `git add .` from the public remote. A name that reads
+# like a template is not a guarantee that it holds placeholders.
+#
+# ⭐ So match `.env` anywhere in the name, with any suffix. The `!.env.example` exception
+# keeps the one file that is *meant* to be committed — see the KEY NAMES ONLY rule there.
+**/.env*
+!**/.env.example
+
 # purpose index (local cache)
 .purpose/
 

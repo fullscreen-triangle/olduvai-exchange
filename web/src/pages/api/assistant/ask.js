@@ -1,4 +1,5 @@
 import { agentFor } from "@/lib/ai/agents";
+import { gather } from "@/lib/ai/facts";
 import * as ollama from "@/lib/ai/ollama";
 import { run } from "@/lib/ai/pipeline";
 import { fail, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
@@ -31,6 +32,14 @@ import { fail, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
  *
  * This does not make the route a place for admissibility logic. It holds none: it validates
  * a string, runs a pipeline of model calls, and shapes the result.
+ *
+ * ⚠️ **That reasoning was over-applied once, and the correction is worth stating here.** "The
+ * request is not forwarded" was read as "the model is told nothing the engine knows", and a
+ * live run answered *"I don't know your current position"* while `Estimate` held the number.
+ * The route now reads engine state through `lib/ai/facts.js` and passes it to the pipeline as
+ * facts. ⭐ Nothing about determinism changes: `Estimate::update` is still the only fold, and
+ * this only reads its result. Not forwarding the *request* is about where computation happens;
+ * it was never an argument for withholding *facts* from a stage whose job is to explain them.
  *
  * # ⭐ Why the response is NDJSON rather than one JSON body
  *
@@ -107,10 +116,33 @@ export default async function handler(req, res) {
   // the same defect at smaller scale.
   line(res, { kind: "open", agent: agent.id, model: base?.model ?? null });
 
+  // ⭐ Read the engine's state before the first model call. One short request against a
+  // loopback service, bounded at 4 s, against a pipeline whose fastest stage is measured in
+  // seconds — so this is not where the latency is.
+  //
+  // ⚠️ Deliberately not wrapped in a rejection path: `gather` reports an unreachable engine as
+  // a fact rather than throwing, because "we could not ask" and "the participant has no
+  // position" are different claims and only the first one is true when the read fails.
+  // ⚠️ The message is passed so `gather` can gate facts on relevance. A fact in the prompt is a
+  // fact the model will find a use for: stating unconditionally that the exchange tracks no
+  // elevation produced a tea-selling answer that ended "...so this information cannot be used to
+  // recommend specific locations". True, and welded to a question that never asked.
+  const facts = await gather(req, message.trim());
+
   const result = await run({
     query: message.trim(),
     agent,
     base,
+    facts: facts.lines,
+    // ⭐ The structured estimate, alongside the prose form of it in `facts`. `lib/ai/plan.js`
+    // needs the flag, not the sentence: a weather lookup is permitted only when the position
+    // rests on an observation, and `facts.lines` renders that distinction as English rather
+    // than as a boolean. Passed from the same read, so the planner and the prompt cannot
+    // describe two different positions.
+    //
+    // ⚠️ This is not additional prompt material. The pipeline routes it to the planner and
+    // never composes it — the model still sees exactly `facts.lines`.
+    position: facts.estimate,
     onStage: (event) => line(res, { kind: "stage", ...event }),
   });
 
@@ -143,6 +175,13 @@ export default async function handler(req, res) {
       ok: true,
       data: {
         answer: result.answer,
+        // ⭐ The retrieved figures, verbatim from their sources, beside the prose rather than
+        // only inside it. The prose is the answer; these are the record it was written from, so
+        // a participant can see which source a number came from instead of trusting the
+        // sentence around it. Measured, this is what exposed an answer whose figures were all
+        // correct and all about the wrong crop — nothing in the prose said so, and the reading's
+        // own heading did. See `readingsFor` in `lib/ai/pipeline.js`.
+        readings: result.readings ?? [],
         // ⚠️ Always empty today. When extraction lands, each of these must go through
         // `accept_proposal` in `crates/olduvai-wasm/src/lib.rs` — the single place a client
         // touches the AI boundary — and arrive as `Source::Asserted` at weight 0.0. There is

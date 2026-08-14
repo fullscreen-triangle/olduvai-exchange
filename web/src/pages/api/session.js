@@ -46,10 +46,81 @@ import { fail, methodNotAllowed } from "@/lib/api/upstream";
  * so a deployment cannot accidentally ship an open door because someone did not read the
  * comment. The 404 rather than 403 is deliberate — in production this genuinely is not a
  * route, and saying "forbidden" would advertise that it exists somewhere.
+ *
+ * ⭐ **The escape hatch, and why it is an environment variable rather than a relaxed guard.**
+ * A single-tenant evaluation deployment needs this route, because without it `requireSession`
+ * rejects every data route and the fusion filter, observation log and foreman are once again
+ * built and unreachable — the exact wall described above, now behind TLS. But "production" is
+ * also the only signal that separates that deployment from a real one, so the guard cannot
+ * simply be loosened.
+ *
+ * So the default is unchanged — production refuses — and opening it takes a variable that
+ * cannot be set by accident and says what it does when read in a unit file. Deployment notes
+ * (`notes/36-server-deployment.md` §1.5) already scope such a deployment to one evaluator
+ * behind a password gate; this is that scoping made executable rather than advisory.
+ *
+ * ⚠️ It must not be set on a deployment carrying real consignment data, and setting it does
+ * not make sessions mean more than the module doc says they mean: still no identity, still no
+ * standing on the exchange. It only decides whether the door exists.
+ *
+ * ⚠️ Read via a bare `process.env.X === "..."` comparison on purpose. Next inlines
+ * `process.env` members at build time, so this is frozen into the bundle by `npm run build`
+ * and is **not** a runtime switch — measured: setting `NODE_ENV=development` in the systemd
+ * unit changed nothing, because the compiled bundle contained the literal
+ * `"production" !== "production"`. Changing it requires a rebuild, which is the right cost:
+ * opening this door should be a deploy, not a restart.
  */
 
 /** ⚠️ Guarded, not documented. See the module doc. */
-const ENABLED = process.env.NODE_ENV !== "production";
+const ENABLED =
+  process.env.NODE_ENV !== "production" ||
+  process.env.OLDUVAI_ALLOW_LOCAL_SESSIONS === "yes";
+
+/**
+ * ⭐ An invite phrase, checked here and nowhere else.
+ *
+ * # ⚠️ Why the gate moved here from the reverse proxy
+ *
+ * A `basic_auth` block in the Caddyfile used to stand in front of every route. It was removed
+ * because it fired before the landing page or `/signin` could render — a browser password box
+ * standing in front of the app's own sign-in pages, re-challenging on navigation. That was the
+ * right removal, but it left the deployment open to anyone who knows the hostname, which was
+ * never asked for either.
+ *
+ * ⭐ This is the same protection placed at the seam it actually belongs to. The landing page,
+ * `/signin` and `/signup` are public — they describe the project and are meant to be read.
+ * What is gated is **minting a working session**, and since every data route calls
+ * `requireSession` and `requireSession` rejects without a cookie, gating this one route gates
+ * the engine, the observation log, the foreman and the assistant behind it. One check, at the
+ * only place that opens a door, rather than a wall in front of the building.
+ *
+ * ⚠️ This is not authentication either, and adding it does not make the module doc above less
+ * true. A shared phrase identifies nobody; it only limits *who can start*. It is a deployment
+ * control while the real identity service is unbuilt, and it is the smaller half of the
+ * problem — `notes/36` §1.1 records the larger one, that `participant.rs` verifies no bearer
+ * token, so anyone already holding a session token can still name any participant.
+ *
+ * ⚠️ Unset means unset: no phrase configured, no gate. That is deliberate for local
+ * development, where the whole server is on loopback and a phrase would be friction with
+ * nothing behind it. On a public deployment it must be set — see `notes/36` §6.5.
+ */
+const INVITE = process.env.OLDUVAI_INVITE ?? null;
+
+/**
+ * ⚠️ Length-independent comparison. The phrase is low-value and an attacker who can time a
+ * loopback HTTP round trip has better options, but a bare `===` on a secret is a habit that
+ * gets copied into the place where it matters.
+ */
+function phraseMatches(given) {
+  if (!INVITE) return true;
+  if (typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(INVITE);
+  // `timingSafeEqual` throws on a length mismatch, so length is compared first and the
+  // comparison still runs — otherwise the early return leaks the length by itself.
+  const equal = a.length === b.length && require("node:crypto").timingSafeEqual(a, b);
+  return equal;
+}
 
 /**
  * ⚠️ 32 bytes from the platform CSPRNG, never `Math.random()`.
@@ -126,9 +197,22 @@ export default async function handler(req, res) {
   // theatre: `signin.js` collects one, and a form that accepts anything teaches a participant
   // that the field does not matter, which is a habit that survives into the version where it
   // does. What is refused here is *storing* it.
-  const { email } = req.body ?? {};
+  const { email, invite } = req.body ?? {};
   if (typeof email !== "string" || !email.includes("@")) {
     return fail(res, 400, "invalid_request", "`email` must look like an email address.");
+  }
+
+  // ⚠️ Checked after the shape of the request and before anything is minted. 403 rather than
+  // 401: the request is well-formed and the phrase is simply wrong, and a 401 would invite a
+  // browser to pop its own credential dialog — the exact behaviour that made the proxy gate
+  // unusable.
+  if (!phraseMatches(invite)) {
+    return fail(
+      res,
+      403,
+      "not_invited",
+      "This deployment is limited to invited evaluators. Ask for the invite phrase, or run the exchange locally where no phrase is needed."
+    );
   }
 
   const token = mint();

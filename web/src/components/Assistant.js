@@ -150,6 +150,7 @@ export default function Assistant({ placeholder, className = "" }) {
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-light/90">
                 {result.data.answer}
               </p>
+              <Readings readings={result.data.readings} />
               <Trace trace={result.data.trace} />
             </>
           ) : (
@@ -310,6 +311,66 @@ function Progress({ declared, stages }) {
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * ⭐ The figures as their sources gave them, beside the answer rather than only inside it.
+ *
+ * # ⚠️ This exists because the prose is not enough to check the prose
+ *
+ * `readingsFor` in `lib/ai/pipeline.js` records the measurements. In short: handed a UN
+ * Comtrade reading under a long prompt, the local model dropped every figure and recommended
+ * eBay. Told in the prompt that the countries are explicitly not the world's largest importers,
+ * it called them "major markets" regardless. It copies numbers faithfully and their caveats not
+ * at all — and the caveat is the half a seller needs.
+ *
+ * ⭐ **Shown open, not behind a disclosure.** `Trace` hides its stage list because "how long
+ * did `ground` take" is worth reading once. This is the opposite case: a reading's heading names
+ * the good, the year, and what the sample is not, and a participant who never expands a panel is
+ * the one who needs to see it. A seller prices against these numbers.
+ *
+ * ⚠️ Measured, this is the only reason a live answer about **black tea** to a question about
+ * **chamomile** was caught: the prose was fluent, its figures were all correct, and only the
+ * reading's own heading said which crop they belonged to.
+ *
+ * ⚠️ The lines are rendered exactly as `sources.js` produced them, ⚠️ caveats and all. They are
+ * written so that the qualifier cannot be separated from the figure, and reformatting them here
+ * — trimming the caveat, tabulating the countries — would be that separation happening in the
+ * view instead of in the model. Whatever is wrong with them is wrong at the source.
+ */
+function Readings({ readings }) {
+  const got = (readings ?? []).filter((r) => r.ok && r.lines?.length);
+  // ⚠️ A source that was consulted and failed is named too. Rendering only what answered would
+  // let an absent market read as an empty one — the same conflation the prompt guards against,
+  // and the reason `ground` reports misses rather than dropping them.
+  const missed = (readings ?? []).filter((r) => !r.ok);
+  if (!got.length && !missed.length) return null;
+
+  return (
+    <div className="mt-4 border-t border-border/60 pt-3">
+      <p className="mb-2 text-[11px] uppercase tracking-widest text-muted/70">
+        What the sources said
+      </p>
+
+      {got.map((r) => (
+        <div key={r.label} className="mb-3 last:mb-0">
+          <p className="text-[11px] font-medium text-light/70">{r.label}</p>
+          {/* `whitespace-pre-wrap` preserves the leading spaces `sources.js` uses to indent
+              each country under its heading — that indentation is what makes the list
+              readable, and collapsing it runs eight countries into one paragraph. */}
+          <pre className="mt-1 whitespace-pre-wrap font-sans text-xs leading-relaxed text-light/80">
+            {r.lines.join("\n")}
+          </pre>
+        </div>
+      ))}
+
+      {missed.map((r) => (
+        <p key={r.label} className="text-[11px] leading-relaxed text-muted/60">
+          {r.label}: {r.reason ?? "did not answer"}
+        </p>
+      ))}
+    </div>
   );
 }
 
