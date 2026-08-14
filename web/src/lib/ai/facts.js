@@ -203,15 +203,30 @@ export async function gather(req, query = "") {
         // describes something recording a fix does resolve. Merging them would promise that
         // pressing the button yields an elevation. It does not; the estimate is 2-D.
         ...elevationFact(query),
-        // ⚠️ Phrased as the sentence to write, not as a topic to cover. Told merely to "say
-        // the location is unknown", a 3b model produces a paragraph about participating in the
-        // exchange that never states the fact plainly. Giving it the wording removes the step
-        // where it decides how to phrase a refusal — which is the step it does badly.
-        "If they ask anything that depends on where they are, your ENTIRE answer is: that the " +
-          "exchange does not know their location yet, and that they can record it on the " +
-          "Position page with \"Use my current location\". Say it in one or two short " +
-          "sentences. Do not explain the exchange, do not describe matching or coalitions, " +
-          "and do not mention the placeholder coordinate.",
+        // ⚠️ **A prohibition, not a script — and the difference was measured.**
+        //
+        // This line used to read *"If they ask anything that depends on where they are, your
+        // ENTIRE answer is: that the exchange does not know their location yet…"*, phrased as
+        // the sentence to write because a 3b model told merely to "say the location is unknown"
+        // produced a paragraph that never stated the fact.
+        //
+        // ⚠️ That worked, and then it fired on questions it was never meant for. Asked *"how
+        // does this exchange work ?"* — a question with no location content at all — the model
+        // answered *"The exchange does not know your location yet. You can record it on the
+        // Position page…"* and appended *"this is a known fact"*. It did not evaluate the
+        // condition; it obeyed the consequent. A conditional instruction to a model of this size
+        // is a suggestion attached to a command, and only the command survives.
+        //
+        // ⭐ The case that wording existed to rescue no longer reaches a model: `pipeline.js`
+        // answers "where am I" deterministically before any stage runs, because the sentence was
+        // already written here and routing written text through a model that garbles it two
+        // times in three buys nothing. So what is left here is the part that must apply to
+        // *every* question — never place the participant using a coordinate nobody observed —
+        // and it is stated as a limit rather than as a reply to recite.
+        "Never state or imply where the participant is, and never derive anything from the " +
+          "placeholder coordinate. If some part of their question needs a location, say only " +
+          "that the exchange has not recorded one yet, and answer the rest of the question " +
+          "normally.",
       ],
     };
   }

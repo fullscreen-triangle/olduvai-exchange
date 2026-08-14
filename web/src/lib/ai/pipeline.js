@@ -137,6 +137,23 @@ const DIRECT_COMPOSE_CAP = 500;
 const DIRECT_CAP_BELOW_TOK_PER_SEC = 8;
 
 /**
+ * Words that make a question depend on where the participant is.
+ *
+ * ⚠️ Crude on purpose, and the same trade `plan.js` and `facts.js` both make explicitly: the
+ * alternative is a model call to classify intent, which spends 40–80 s on this machine to save
+ * a regex. When it misfires the cost is asymmetric and cheap — a false positive answers a
+ * location question the pipeline would also have answered, and a false negative runs the full
+ * pipeline, which is the existing behaviour.
+ *
+ * ⚠️ `where` is included but `here` is not. "Where can I sell chamomile" is a location question
+ * only in grammar; it wants a market, and `facts.js`'s warning lines already stop the model
+ * placing the participant. Gating it here would replace a market answer with a refusal, which
+ * is the elevation mistake in a new place.
+ */
+const POSITION_WORDS =
+  /\b(my (position|location|coordinates?|elevation|altitude)|where am i|where i am|do you know where|my gps|my fix|locate me|my place)\b/i;
+
+/**
  * Working memory for a single query.
  *
  * ⭐ Kept from four-sided-triangle, and kept *narrow*: it lives for one request and is
@@ -279,6 +296,95 @@ export async function run({ query, agent, base, onStage, facts = [], position = 
   // what it achieved on the way past, and every question after that is decided on an observed
   // rate. Nothing is announced here because nothing happens here.
   const speed = ollama.throughput({ model: base.model });
+
+  /**
+   * ⭐ **The second answer no model composes: "we have never measured where you are."**
+   *
+   * Same rule as the spelling case below, reached from the other end. `lib/ai/facts.js` already
+   * writes the exact sentence to say — it had to, because a 3b model told merely to *"say the
+   * location is unknown"* produced a paragraph about participating in the exchange that never
+   * stated the fact. Having written the sentence, handing it to the model to re-state is the
+   * step that loses it.
+   *
+   * # ⚠️ The measurement
+   *
+   * The participant asked *"what is my position ?"* against an engine reporting
+   * `observation_count: 0`, twice:
+   *
+   *   1. **51.8 s** → `ollama_error`. No answer at all.
+   *   2. **171.1 s** → the correct sentence.
+   *
+   * An earlier live run answered *"The position cannot be determined due to lack of access to
+   * the matching engine records."* ⚠️ **That is a fabrication, and a specific kind.** The engine
+   * was reachable, answered in milliseconds, and said precisely what it knows. The model invented
+   * an *access* failure to explain an *evidential* one — the same substitution `facts.js` records
+   * for elevation, where it invented a *units* problem. A participant reading it would go looking
+   * for a broken service. There is no broken service; there is no observation.
+   *
+   * ⭐ Getting that wrong is worse than the tea answer was. "The system is broken" and "you have
+   * not told us where you are" call for opposite actions, and only one of them is true.
+   *
+   * # ⚠️ Why this is gated on the question rather than applied whenever position is unknown
+   *
+   * Most questions do not depend on location, and an unmeasured position is not a reason to
+   * refuse them — `facts.js` makes the same distinction for its elevation line, which is gated
+   * on the question for the same reason: stated unconditionally, it welded a true elevation
+   * sentence onto an answer about selling tea.
+   *
+   * So this fires only when the question is *about* where the participant is. Anything else with
+   * an unmeasured position still runs the full pipeline and gets `facts.js`'s warning lines in
+   * the prompt, which is the existing behaviour and stays.
+   */
+  const asksPosition = POSITION_WORDS.test(mem.query ?? "");
+  const unmeasured = mem.position && mem.position.rests_on_observation === false;
+
+  if (asksPosition && unmeasured) {
+    // ⚠️ Composed here rather than read from `facts.js`, because `facts.js` writes *instructions
+    // to a model* — "your ENTIRE answer is…" — and those sentences are not addressed to the
+    // participant. Reproducing them verbatim would show them the prompt. The facts they state
+    // are the same and come from the same read.
+    const answer =
+      "The exchange does not know where you are. No observation has been recorded for you " +
+      "yet, so there is nothing to fuse — the engine holds only a placeholder coordinate, " +
+      "which is not a measurement of you and is not reported as one. " +
+      "You can record a position on the Position page with \"Use my current location\".";
+
+    record(mem, "ground", {
+      tier: Tier.BASE,
+      // ⚠️ `null` — no model ran. Same rule as the spelling path: naming a model against a stage
+      // it did not run is a fabricated trace entry.
+      model: null,
+      ms: 0,
+      ok: true,
+      // ⚠️ `degraded: true`. The engine answered and the answer was "nothing observed" — that is
+      // a real limit on what can be said, and the participant is entitled to see it marked
+      // rather than infer it.
+      degraded: true,
+      detail:
+        `The engine reports observation_count: ${mem.position.observation_count ?? 0}. ` +
+        "No model was called: an unmeasured position is a fact, not a question.",
+    });
+
+    return {
+      ok: true,
+      answer,
+      // ⭐ Carried, not suppressed. `facts.js`'s own lines say the position is not known and why,
+      // and the readings panel is where a participant checks an answer against its source.
+      readings: readingsFor(mem),
+      proposals: mem.proposals,
+      trace: {
+        stages: mem.stages,
+        ms: Date.now() - started,
+        agent: mem.agent.id,
+        domain: mem.agent.domain,
+        shape: "planner",
+        tokensPerSecond: speed.ok ? speed.tokensPerSecond : null,
+        specialist: null,
+        specialistNote: "No model was called: the exchange has recorded no observation.",
+        checks: null,
+      },
+    };
+  }
 
   /**
    * ⭐ **The one answer no model composes.**
