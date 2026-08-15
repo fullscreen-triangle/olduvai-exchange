@@ -63,6 +63,12 @@ export default function RailPage({ children }) {
   const gateKey = state.body?.blockedBy ?? entry.blockedBy;
   const gate = GATES[gateKey];
 
+  // ⭐ The same declaration, whichever state produced it. A blocked route puts it beside the
+  // gate; a live one puts it inside `data`. Reading both here means the view has exactly one
+  // notion of "what this reading is", which is the property that stops the caption and the
+  // drawing disagreeing.
+  const declaration = state.body?.declaration ?? state.data?.declaration ?? null;
+
   return (
     <DashboardLayout title={entry.label}>
       {/* Top-aligned rather than vertically centred: with the agent mounted below, the page
@@ -105,10 +111,17 @@ export default function RailPage({ children }) {
 
             {/* A blocked feed still knows its own units and provenance, and stating them is
                 not filler — `source: asserted` is the fact that this reading would never
-                carry evidential weight, whoever ends up providing it. */}
-            {state.status === "blocked" && state.body?.declaration && (
-              <Declaration declaration={state.body.declaration} />
-            )}
+                carry evidential weight, whoever ends up providing it.
+
+                ⚠️ **This used to be the only place a `Declaration` rendered**, gated on
+                `status === "blocked"`, and that was note 34 §5's shape in a new spot: true of
+                every caller at the time it was written, false the moment one answered. The
+                consequence was backwards — the provenance chrome vanished exactly when data
+                arrived, so a page stated what its reading would constrain right up until it
+                constrained something. A drawn cell with no provenance beside it is the
+                readable-as-evidence case this whole rail exists to prevent, so the
+                declaration now renders in both states. */}
+            {declaration && <Declaration declaration={declaration} />}
 
             {state.status === "blocked" && !gate && (
               <Panel label="Unavailable">
@@ -118,6 +131,10 @@ export default function RailPage({ children }) {
               </Panel>
             )}
 
+            {/* ⚠️ Below the declaration, never above it, and the order is not cosmetic. Above
+                it the drawing is the page and the constraint statement is a footnote — and the
+                statement is the part that stops a corridor being read as a place, or a grid
+                cell as a measurement of the field inside it. */}
             {state.status === "ready" && children?.(state.data)}
           </div>
 
@@ -163,8 +180,13 @@ export default function RailPage({ children }) {
  * Leaving the constant would have labelled our own computation as non-evidence on the very
  * pages where the distinction is the whole point. The caption is now derived from the value
  * it is describing.
+ *
+ * ⭐ Exported so a renderer mounted as this page's child can label its own marks with the
+ * same words the declaration above it uses. ⚠️ The alternative — a renderer carrying its own
+ * copy of these strings — lets the caption and the drawing drift apart, which is this same
+ * §5 bug on a canvas instead of in a `<dl>`.
  */
-const PROVENANCE_CAPTION = {
+export const PROVENANCE_CAPTION = {
   asserted: "context, not evidence",
   instrument: "measured, and admissible",
   placeholder: "a stand-in for a measurement not yet made",
@@ -178,7 +200,7 @@ const PROVENANCE_CAPTION = {
  * an along-track position nobody observed. Spelling it out on the page is what stops the four
  * observation rails being read as four ways of getting a lat/lng.
  */
-const CONSTRAINT_CAPTION = {
+export const CONSTRAINT_CAPTION = {
   fix: "a point, isotropically",
   corridor: "distance from a line — not a place along it",
   within: "a region, at that region's own size",

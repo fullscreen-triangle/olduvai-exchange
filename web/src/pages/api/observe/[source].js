@@ -42,8 +42,21 @@ import { requireSession, authHeaders } from "@/lib/api/session";
  * # Where the arithmetic lives
  *
  * Not here. `olduvai_core::fusion::Estimate::update` is the only implementation of the
- * update step, reached natively by the server and through WASM by this browser. This route
- * forwards; it does not fold.
+ * update step. This route forwards; it does not fold.
+ *
+ * ⚠️ **This paragraph used to claim the update was "reached natively by the server and through
+ * WASM by this browser", and the second half was false.** `crates/olduvai-wasm` exports eleven
+ * functions — `encode`, `decode`, `agent_check`, `water_fill`, `accept_proposal` and friends —
+ * and **none of them comes from `fusion` or `orbit`**. There is also no built wasm package
+ * anywhere under `web/`: no `pkg/`, no `.wasm`, no `wasm-pack` step in `package.json`. The
+ * browser folds nothing today; every fold happens in the server process.
+ *
+ * ⭐ Recorded rather than quietly deleted because of how the sentence came to be written: it
+ * described the intended design, in the present tense, at a time when the design was the only
+ * thing that existed. That is the failure mode note 34 §5 named in a different layer — a
+ * sentence nothing type-checks — and here it would have sent a reader hunting for a WASM call
+ * that is not there. If `fusion` is ever exported and a package is built into `web/`, the
+ * original sentence becomes true and this warning comes out.
  */
 
 /**

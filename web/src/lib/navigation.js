@@ -125,7 +125,13 @@ export const LEFT_RAIL = [
     blurb: "Atmosphere over your holding, at the provider's grid resolution",
     api: "/api/feeds/weather",
     kind: "context",
-    blockedBy: "no-provider",
+    // ⭐ `no-observations`, not `no-provider`. Open-Meteo is wired and keyless, so a provider is
+    // no longer the thing this page is waiting for — a *position to centre the grid on* is.
+    // ⚠️ This value is only the fallback for when the BFF itself cannot be reached, but leaving
+    // it as `no-provider` would have put "choosing a provider is a research decision" on a page
+    // whose provider was chosen, which is the same self-contradiction note 37 §4.1 recorded
+    // between this route and `lib/ai/sources.js`.
+    blockedBy: "no-observations",
   },
   {
     href: "/dashboard/traffic",

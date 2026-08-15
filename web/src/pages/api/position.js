@@ -34,9 +34,14 @@ import { forward, methodNotAllowed, notImplemented } from "@/lib/api/upstream";
  *
  * # ⚠️ The fold does not happen here
  *
- * `Estimate::update` in `olduvai-core` is the only implementation, reached natively by the
- * server and through WASM by the browser. If this route ever multiplies a sigma, a second
- * implementation has been born — the same mechanical test `positions.rs` applies to itself.
+ * `Estimate::update` in `olduvai-core` is the only implementation. If this route ever
+ * multiplies a sigma, a second implementation has been born — the same mechanical test
+ * `positions.rs` applies to itself.
+ *
+ * ⚠️ This paragraph also claimed the update was "reached natively by the server and through
+ * WASM by the browser". The browser half was false; see the same correction in
+ * `pages/api/observe/[source].js`. `olduvai-wasm` exports no `fusion` type and `web/` contains
+ * no built wasm package, so every fold happens in the server process today.
  */
 
 export default async function handler(req, res) {
