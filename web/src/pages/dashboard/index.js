@@ -57,7 +57,15 @@ export default function Dashboard() {
             What are you bringing to market?
           </h1>
 
-          <Composer onSubmit={submit} />
+          {/* ⚠️ An explicit placeholder, overriding `Composer`'s default of *"Describe what you
+              have, or what you need"*. That default invited a question — "what you need" is how
+              a person phrases one — into the box that submits to the matching engine, and a
+              real question about where to sell chamomile came back as the cohesion gate. The
+              box was doing its job; its label was describing a different box. */}
+          <Composer
+            onSubmit={submit}
+            placeholder="Describe a consignment: what you have, how much, and where it is"
+          />
 
           {result && (
             <div
@@ -85,6 +93,27 @@ export default function Dashboard() {
                       {result.body.note}
                     </p>
                   )}
+
+                  {/* ⭐ The handoff, and it exists because of a real misuse rather than a
+                      hypothetical one. Asked *"where can I sell chamomile tea leaves"*, this
+                      box returned the cohesion gate — correctly, because it submits to the
+                      matcher. But the question was a question, the assistant below retrieves
+                      live trade and price data keylessly, and nothing on the page said so.
+
+                      ⚠️ This is not a mode toggle and must not become one. `notes/28` keeps
+                      matching and asking separate acts; merging the boxes would make it
+                      possible to submit a consignment to a language model by accident. The
+                      offer is a *sentence*, and the participant retypes into the other box —
+                      which keeps the boundary visible at the moment it matters most. */}
+                  {result.body?.blockedBy === "cohesion-gate" && (
+                    <p className="mt-4 border-l-2 border-border pl-3 text-sm leading-relaxed text-muted/80">
+                      If that was a question rather than a consignment, the assistant below can
+                      take it — it reads live trade volumes, reference prices and plant
+                      chemistry from public sources. ⚠️ It explains and drafts only: it does not
+                      match, rank, or record.
+                    </p>
+                  )}
+
                   <p className="mt-4 text-[11px] text-muted/50">{gate.reference}</p>
                 </>
               )}
