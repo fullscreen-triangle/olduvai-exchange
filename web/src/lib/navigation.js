@@ -79,14 +79,30 @@ export const LEFT_RAIL = [
     constrains: "estimate",
     blockedBy: "no-observations",
   },
+  /**
+   * ⚠️ **`kind: "context"`, not `"observation"` — and the endpoint moved with it.**
+   *
+   * This entry read `/api/observe/terrain`, `kind: "observation"`, `constrains: "within"`. That
+   * described a DEM tile *entering the observation log* as `Observation::Within`, saying **the
+   * holding is somewhere in this region** — a real design, still unbuilt, and gated on an
+   * `OLDUVAI_TERRAIN_API_KEY` that nothing sets.
+   *
+   * ⭐ What is now built answers the **inverse** question: *given a position already folded from
+   * the log, what is the ground doing there.* It reads the DEM **at** a place; it cannot tell you
+   * the place. So it is context, like weather, and it lives in `feeds/`.
+   *
+   * ⚠️ Leaving `constrains: "within"` while serving this feed would have been the worse half of
+   * the change: the rail would have told a participant that a reading which cannot constrain
+   * position does constrain it. `constrains` is dropped rather than softened — a context feed
+   * constrains nothing, and a field claiming otherwise is what note 33 exists to prevent.
+   */
   {
     href: "/dashboard/terrain",
     label: "Terrain",
-    blurb: "Elevation and slope under your holding, at a stated resolution",
-    api: "/api/observe/terrain",
-    kind: "observation",
-    constrains: "within",
-    blockedBy: "no-provider",
+    blurb: "Ground elevation under your holding, on the provider's own DEM",
+    api: "/api/feeds/terrain",
+    kind: "context",
+    blockedBy: "no-observations",
   },
   {
     href: "/dashboard/satellites",

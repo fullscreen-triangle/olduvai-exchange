@@ -1,6 +1,7 @@
 import { methodNotAllowed, fail, notImplemented, forward } from "@/lib/api/upstream";
 import { authHeaders, readSession } from "@/lib/api/session";
 import { fetchWeatherGrid, RESOLUTION_DEG, RESOLUTION_M } from "@/lib/api/openmeteo";
+import { fetchElevationGrid, DEM_STEP_DEG, DEM_STEP_M } from "@/lib/api/elevation";
 
 /**
  * External context feeds: weather, traffic, prices, advisories.
@@ -75,6 +76,33 @@ const FEEDS = {
     note: `Current conditions on the provider's own grid around the holding. ⚠️ The grid step is ${RESOLUTION_DEG}° of latitude — about ${(RESOLUTION_M / 1000).toFixed(1)} km — and every cell is reported at the coordinate the provider snapped to, not the one requested. Points closer together than one cell are one reading, so nothing is drawn between cells.`,
   },
   /**
+   * ⭐ The second keyless feed, and the second one whose provider was already chosen.
+   *
+   * Terrain is declared here rather than in `pages/api/observe/[source].js` — where a `terrain`
+   * entry also exists — and the split is the note 33 distinction, not a duplication:
+   *
+   * - `observe/terrain` would be a DEM tile entering the log as `Observation::Within`, saying
+   *   *the holding is somewhere in this region*. That is an observation **of the participant**,
+   *   it constrains position, and it is still unbuilt.
+   * - This is the inverse question: *given a position already folded from the log, what is the
+   *   ground doing there.* It reads the DEM **at** a place. It cannot tell you the place.
+   *
+   * ⚠️ **Nothing this feed returns may enter the observation log.** Feeding a DEM sample back in
+   * as evidence for the position it was queried with would close a loop — the estimate would
+   * gain confidence from a reading that only exists because of the estimate. That is the reason
+   * every feed in this table is `asserted` and none of them is an `Observation`.
+   */
+  terrain: {
+    label: "Terrain",
+    source: "asserted",
+    units: { elevation: "m", relief: "m", sample: "deg", resolution: "m" },
+    envKey: null,
+    // ⚠️ 90 m is measured, not read off the provider's documentation — see `lib/api/elevation.js`
+    // for the row walk that established it. It agrees with the documented SRTM/GLO-90 source
+    // here, unlike the forecast grid, where measurement and documentation disagreed.
+    note: `Ground elevation under and around the holding, on the provider's own DEM. ⚠️ Cells are about ${DEM_STEP_M} m across — ${DEM_STEP_DEG}° — and nothing is drawn between samples. A slope computed across two cells is a claim about ${DEM_STEP_M * 2} m of ground, not about a field boundary.`,
+  },
+  /**
    * ⚠️ `TOMTOM_API_KEY`, not `OLDUVAI_TRAFFIC_API_KEY`.
    *
    * ⭐ The old name was set by nothing. A key for this feed has been present in `web/.env.local`
@@ -136,16 +164,19 @@ export default async function handler(req, res) {
   // one this file already carried: a check whose failure mode is indistinguishable from the
   // condition it is testing for.
   if (spec.envKey === null) {
-    if (feed !== "weather") {
-      // ⚠️ Defensive rather than reachable: `weather` is the only keyless entry today. If a
-      // second one is declared without a client, this says so instead of falling through to the
-      // key check and blaming a missing key that was never required.
+    // ⭐ A table rather than a chain of `feed !== "..."` checks. There are two keyless feeds now
+    // and the previous form — an inverted test naming the single implemented one — would have
+    // needed rewriting to add each. The `notImplemented` fallback below stays, and stays
+    // *reachable*: a feed declared keyless with no client says exactly that, instead of falling
+    // through to the key check and blaming a credential that was never required.
+    const client = { weather, terrain }[feed];
+    if (!client) {
       return notImplemented(res, {
         blockedBy: "no-provider",
         note: `${spec.label} is declared keyless but no client is implemented for it.`,
       });
     }
-    return weather(req, res, spec, feed);
+    return client(req, res, spec, feed);
   }
 
   // The provider key is absent, which is the expected state. Returning the feed's
@@ -210,6 +241,77 @@ export default async function handler(req, res) {
  * with the same confident squares a real fix produces. `rests_on_observation` is the field that
  * distinguishes them and it is checked below.
  */
+/**
+ * Resolve the participant's folded position, or the reason there isn't one.
+ *
+ * Returns `{ok: true, at, estimate}` or `{ok: false, response}` where `response` is the already
+ * formed refusal — the caller returns it unchanged.
+ *
+ * ⭐ Extracted when `terrain` became the second feed centred on the participant's position, and
+ * needed *the same four checks in the same order*. Duplicating them would have been four chances
+ * for the two pages to drift apart on what counts as a known location — and the check that
+ * matters most, `rests_on_observation`, is precisely the one a second implementation would be
+ * likeliest to omit, because the code works without it and only lies.
+ *
+ * ⚠️ `blockedBy` values are unchanged from the weather implementation, because `RailPage` and
+ * `GATES` already render them.
+ */
+async function locate(req, declaration, { centredOn }) {
+  // ⚠️ Checked here rather than by `requireSession`, which would 401. A signed-out visitor
+  // looking at the page should be told what the page needs, not rejected by it — and
+  // `blockedBy` is the vocabulary `RailPage` already renders.
+  if (!readSession(req)) {
+    return {
+      ok: false,
+      response: {
+        blockedBy: "no-observations",
+        note: `${centredOn} is drawn around the participant's folded position, and there is no session to fold one for.`,
+        declaration,
+      },
+    };
+  }
+
+  const position = await forward("/v1/position", { headers: authHeaders(req) });
+
+  if (!position.ok) {
+    return {
+      ok: false,
+      response: {
+        blockedBy: "upstream-unreachable",
+        upstream: position.reason,
+        note: `The provider is reachable, but the position ${centredOn.toLowerCase()} would be centred on is folded by olduvai-server, which did not answer. This is an outage, not a statement about the ground or the weather.`,
+        declaration,
+      },
+    };
+  }
+
+  // ⚠️ `estimate` is the wrapper the server actually sends — `routes.rs:137` returns
+  // `{estimate, declaration, log_length, cache_consistent}` and every field below lives inside
+  // it. Written first as `data.at ?? data.estimate.at`, which resolved correctly by accident and
+  // implied a top-level shape upstream never sends; a reader would have believed the wrong
+  // contract from code that worked.
+  const estimate = position.data?.estimate;
+  const at = estimate?.at;
+  // ⭐ The check that stops anything being drawn around the prior. `/v1/position` answers 200
+  // even with an empty log, returning the seed coordinate at a 200 km sigma — the honest
+  // encoding of *we do not know where you are* (note 33 §7). A page must not read it as an
+  // answer, and this field is what distinguishes them.
+  const measured = estimate?.rests_on_observation === true;
+
+  if (!measured || typeof at?.latitude !== "number" || typeof at?.longitude !== "number") {
+    return {
+      ok: false,
+      response: {
+        blockedBy: "no-observations",
+        note: "No position has been observed yet, so there is nothing to centre on. The engine's uninformed prior is 200 km wide — far wider than anything this page draws — and sampling around it would show a precision nobody measured. Submit a GPS fix and this fills in.",
+        declaration,
+      },
+    };
+  }
+
+  return { ok: true, at, estimate };
+}
+
 async function weather(req, res, spec, feed) {
   const declaration = {
     feed,
@@ -220,45 +322,9 @@ async function weather(req, res, spec, feed) {
     readings: [],
   };
 
-  // ⚠️ Checked here rather than by `requireSession`, which would 401. A signed-out visitor
-  // looking at the weather page should be told what the page needs, not rejected by it — and
-  // `blockedBy` is the vocabulary `RailPage` already renders.
-  if (!readSession(req)) {
-    return notImplemented(res, {
-      blockedBy: "no-observations",
-      note: "The grid is drawn around the participant's folded position, and there is no session to fold one for.",
-      declaration,
-    });
-  }
-
-  const position = await forward("/v1/position", { headers: authHeaders(req) });
-
-  if (!position.ok) {
-    return notImplemented(res, {
-      blockedBy: "upstream-unreachable",
-      upstream: position.reason,
-      note: "The provider is reachable, but the position this grid would be centred on is folded by olduvai-server, which did not answer. This is an outage, not a statement about the weather.",
-      declaration,
-    });
-  }
-
-  // ⚠️ `estimate` is the wrapper the server actually sends — `routes.rs:137` returns
-  // `{estimate, declaration, log_length, cache_consistent}` and every field below lives inside
-  // it. Written first as `data.at ?? data.estimate.at`, which resolved correctly by accident and
-  // implied a top-level shape upstream never sends; a reader would have believed the wrong
-  // contract from code that worked.
-  const estimate = position.data?.estimate;
-  const at = estimate?.at;
-  // ⭐ The check that stops a grid being drawn around the prior. See the doc above.
-  const measured = estimate?.rests_on_observation === true;
-
-  if (!measured || typeof at?.latitude !== "number" || typeof at?.longitude !== "number") {
-    return notImplemented(res, {
-      blockedBy: "no-observations",
-      note: "No position has been observed yet, so there is no cell to centre on. The engine's uninformed prior is 200 km wide — forty times this grid's whole extent — and drawing cells around it would show a precision nobody measured. Submit a GPS fix and this fills in.",
-      declaration,
-    });
-  }
+  const located = await locate(req, declaration, { centredOn: "The grid" });
+  if (!located.ok) return notImplemented(res, located.response);
+  const { at, estimate } = located;
 
   const grid = await fetchWeatherGrid({ latitude: at.latitude, longitude: at.longitude });
 
@@ -291,6 +357,81 @@ async function weather(req, res, spec, feed) {
           longitude: at.longitude,
           sigma_m: estimate.sigma_m ?? null,
         },
+      },
+    },
+  });
+}
+
+/**
+ * The terrain feed: the DEM under and around the participant's folded position.
+ *
+ * # ⚠️ Why the sigma travels with the sample, and is not decoration
+ *
+ * The DEM step is ~90 m. A participant's fix might be good to 40 m or to 4 km, and **the same
+ * drawing serves both** unless the uncertainty is carried. At 4 km sigma the participant could
+ * be in any of ~2,000 of these cells, and a relief figure quoted from the sampled window would
+ * be a statement about somewhere they probably are not.
+ *
+ * ⭐ So `centre.sigma_m` goes out, and `sigma_exceeds_sample` is computed here rather than left
+ * for the renderer to notice. It is the single fact that decides whether the numbers below it
+ * mean anything, and a renderer that forgot to derive it would draw a confident hillside.
+ *
+ * # ⚠️ What is deliberately not computed
+ *
+ * No slope, no aspect, no hillshade. All three require differencing neighbouring cells, and a
+ * slope across two 90 m cells is a claim about 180 m of ground — which is larger than most
+ * holdings and much larger than any field boundary a participant would recognise. Note 37 §4:
+ * draw the uncertainty first, draw the value only if it was measured. Slope here would be a
+ * derived value dressed as a measured one.
+ */
+async function terrain(req, res, spec, feed) {
+  const declaration = {
+    feed,
+    label: spec.label,
+    source: spec.source,
+    units: spec.units,
+    dem_step_deg: DEM_STEP_DEG,
+    dem_step_m: DEM_STEP_M,
+    readings: [],
+  };
+
+  const located = await locate(req, declaration, { centredOn: "The elevation sample" });
+  if (!located.ok) return notImplemented(res, located.response);
+  const { at, estimate } = located;
+
+  const dem = await fetchElevationGrid({ latitude: at.latitude, longitude: at.longitude });
+
+  if (!dem.ok) {
+    return notImplemented(res, {
+      blockedBy: "upstream-unreachable",
+      upstream: dem.reason,
+      // ⚠️ Named as the provider's outage, not as "no terrain". "We could not ask" is a different
+      // claim from "there is nothing there", and only one of them is something to act on.
+      note: `Open-Meteo's elevation service did not answer (${dem.reason}). Nothing is known to be wrong with the terrain data; this page could not retrieve it.`,
+      declaration,
+    });
+  }
+
+  const sigma_m = estimate.sigma_m ?? null;
+
+  return res.status(200).json({
+    ok: true,
+    data: {
+      ...dem,
+      declaration: {
+        ...declaration,
+        // ⭐ Stamped from `spec`, never from anything the provider said about itself. The rule at
+        // the top of this file: the provider is asserting, whatever it calls itself.
+        source: spec.source,
+        readings: dem.points,
+        centre: {
+          latitude: at.latitude,
+          longitude: at.longitude,
+          sigma_m,
+        },
+        // ⭐ The fact that governs how the rest should be read. See the doc above.
+        sigma_exceeds_sample:
+          typeof sigma_m === "number" ? sigma_m > dem.sample_deg * 111_320 : null,
       },
     },
   });
