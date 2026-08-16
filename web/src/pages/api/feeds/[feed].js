@@ -74,11 +74,29 @@ const FEEDS = {
     // interpolate a statement rather than a style.
     note: `Current conditions on the provider's own grid around the holding. ⚠️ The grid step is ${RESOLUTION_DEG}° of latitude — about ${(RESOLUTION_M / 1000).toFixed(1)} km — and every cell is reported at the coordinate the provider snapped to, not the one requested. Points closer together than one cell are one reading, so nothing is drawn between cells.`,
   },
+  /**
+   * ⚠️ `TOMTOM_API_KEY`, not `OLDUVAI_TRAFFIC_API_KEY`.
+   *
+   * ⭐ The old name was set by nothing. A key for this feed has been present in `web/.env.local`
+   * throughout — under the provider's name, which is how every other credential in that file is
+   * named (`OPENWEATHERMAP_API_KEY`, `NEXT_PUBLIC_MAPBOX_TOKEN`). The route read an
+   * `OLDUVAI_`-prefixed name that no file sets, found nothing, and reported *"no provider
+   * configured — choosing one is a research decision"* on a page whose provider was chosen and
+   * paid for.
+   *
+   * ⚠️ Exactly the failure the weather feed carried and this file already documents above: a
+   * gate that cannot be satisfied by doing what it asks. The remedy it named — configure a
+   * provider — had been done, and doing it again could not have cleared the gate.
+   *
+   * ⚠️ Renaming this makes the key *found*, not the feed *implemented*. There is no TomTom client
+   * yet, so this now falls to the "key present, no client" branch below, which says so. That is a
+   * different and truer statement than the one it replaces.
+   */
   traffic: {
     label: "Traffic",
     source: "asserted",
     units: { delay: "s", distance: "m" },
-    envKey: "OLDUVAI_TRAFFIC_API_KEY",
+    envKey: "TOMTOM_API_KEY",
     note: "Route conditions on haulage corridors. Relevant to transport legs, but a leg's cost is settled by the ledger, not by a live estimate.",
   },
   prices: {
@@ -151,9 +169,21 @@ export default async function handler(req, res) {
   // ⚠️ When a provider is chosen, the fetch goes here — and whatever it returns must be
   // stamped `source: spec.source` on the way out. Do not let a provider's own confidence
   // field become `source`; the provider is asserting, whatever it calls itself.
+  //
+  // ⭐ Reached by `traffic` now that its `envKey` names the key that is actually set. The note
+  // says which half is missing, because "no provider configured" would send someone to buy a
+  // credential they already hold — and the declaration goes out too, so the page renders its
+  // real units and provenance rather than an empty card.
   return notImplemented(res, {
     blockedBy: "no-provider",
-    note: "A provider key is present but no provider client is implemented.",
+    note: `A ${spec.label.toLowerCase()} credential is present, so the provider question is settled — what is missing is the client that calls it, which is unwritten. Nothing is wrong with the key.`,
+    declaration: {
+      feed,
+      label: spec.label,
+      source: spec.source,
+      units: spec.units,
+      readings: [],
+    },
   });
 }
 
