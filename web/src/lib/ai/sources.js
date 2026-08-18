@@ -40,6 +40,17 @@
  * added — `envKey` is honoured — but the keyless set must stay sufficient on its own.
  */
 
+/**
+ * ⭐ The commodity table and the M49 map moved to `lib/commodities.js`.
+ *
+ * ⚠️ Moved rather than copied. `lib/market.js` now answers the composer's consignment box from
+ * the same Comtrade endpoint, and two copies of an HS table would eventually disagree — at which
+ * point one word returns a real, sourced market for the wrong good, with nothing in the answer
+ * saying which table was stale. The doc comments explaining why each is *declared* rather than
+ * derived travelled with them.
+ */
+import { COMMODITY_TABLE as COMMODITIES, countryName, M49 } from "@/lib/commodities";
+
 /** ⚠️ Short. `ground` runs inline in a request that is already slow; a hung source is worse
  *  than an absent one, and a source that misses this window is reported as missed. */
 const TIMEOUT_MS = 6000;
@@ -65,10 +76,17 @@ const TIMEOUT_MS = 6000;
  * same slack to sources that have never needed it, which is how a hung host quietly becomes a
  * 15 s stall on a request whose whole budget is being argued over elsewhere in this codebase.
  *
- * ⚠️ 15 s, not 30: this still has to fail eventually, and `fetchAll` runs the plan concurrently
- * so a slow Comtrade does not delay the other three.
+ * ⚠️ **Raised 15 s → 25 s on 2026-08-18, because 15 s was measured too low.** Three timed calls
+ * to this same endpoint: chamomile 9,461 ms, maize 12,375 ms, wheat **15,989 ms**. Wheat exceeded
+ * the bound — meaning the *largest* commodities, the ones most likely to be asked about, were the
+ * ones being converted into an apparent absence. That is precisely the failure the paragraph
+ * above describes, and the constant chosen to prevent it was itself causing it.
+ *
+ * ⚠️ 25 s, not 30: this still has to fail eventually, and `fetchAll` runs the plan concurrently
+ * so a slow Comtrade does not delay the other three. `lib/market.js` uses the same 25 s for the
+ * same endpoint and records the same measurements.
  */
-const SLOW_TIMEOUT_MS = 15000;
+const SLOW_TIMEOUT_MS = 25000;
 
 /**
  * ⭐ One fetch, bounded, never throwing.
@@ -182,8 +200,6 @@ export const SOURCES = {
    * ⚠️ Comtrade's public endpoint is rate-limited and occasionally slow. A miss here is a
    * stated miss; it is not permitted to fail the request.
    */
-  // eslint-disable-next-line no-use-before-define -- `countryName` is hoisted; declared below
-  // with the other lookup tables so the registry reads as a registry.
   trade: {
     label: "UN Comtrade",
     about:
@@ -417,30 +433,12 @@ export const SOURCES = {
 };
 
 /**
- * ⭐ Commodities this exchange will look up, with their HS codes.
- *
- * ⚠️ A short declared table rather than a model-emitted code. See `trade.fetch` — a six-digit
- * code is exactly the kind of specific-looking value a model fabricates convincingly, and a
- * wrong HS code returns a confident, well-formed answer about a different good entirely.
- *
- * `year` is pinned per commodity rather than computed from the clock. Comtrade's most recent
- * *complete* year lags the calendar by well over a year, and asking for the current year
- * returns an empty set that looks identical to "nobody imports this".
+ * ⚠️ The commodity table and the M49 country map used to be declared here. They are now
+ * imported at the top of this file from `lib/commodities.js`, because `lib/market.js` needs
+ * the same two tables and a second copy would eventually disagree with this one.
  */
-const COMMODITIES = {
-  chamomile: { hs: "121190", label: "Chamomile and other plants used in pharmacy", year: 2023 },
-  tea: { hs: "090240", label: "Black tea, fermented, in bulk", year: 2023 },
-  "green tea": { hs: "090220", label: "Green tea, in bulk", year: 2023 },
-  coffee: { hs: "090111", label: "Coffee, not roasted, not decaffeinated", year: 2023 },
-  maize: { hs: "100590", label: "Maize (corn), other than seed", year: 2023 },
-  soybeans: { hs: "120190", label: "Soya beans, other than seed", year: 2023 },
-  groundnuts: { hs: "120242", label: "Groundnuts, shelled", year: 2023 },
-  cotton: { hs: "520100", label: "Cotton, not carded or combed", year: 2023 },
-  tobacco: { hs: "240120", label: "Tobacco, partly or wholly stemmed", year: 2023 },
-  sesame: { hs: "120740", label: "Sesamum seeds", year: 2023 },
-  wheat: { hs: "100199", label: "Wheat and meslin, other", year: 2023 },
-  sugar: { hs: "170114", label: "Raw cane sugar", year: 2023 },
-};
+
+
 
 /**
  * Compounds this exchange associates with a crop.
@@ -462,52 +460,6 @@ const EXTRACTS = {
 
 /** Commodity names the planner may use. Exposed so the planner's prompt can list them. */
 export const KNOWN_COMMODITIES = Object.keys(COMMODITIES);
-
-/**
- * ⭐ M49 numeric country codes → names.
- *
- * # ⚠️ Why this table has to exist
- *
- * Comtrade's row carries `reporterCode`, `reporterISO` and `reporterDesc`, so the obvious code
- * reads `x.reporterDesc` and prints a country name. On the public preview endpoint
- * **`reporterISO` and `reporterDesc` are `null` on every row** — measured across 500 rows, zero
- * had a description. Only the numeric code is populated.
- *
- * Printing the raw code would produce *"76: 11531 tonnes"*, and a model handed that will either
- * drop it or guess which country 76 is. Neither is acceptable, so the mapping is declared here
- * where it can be checked, rather than left to a stage that would fabricate it fluently.
- *
- * ⚠️ Partial by design — the reporters the preview endpoint actually returns, plus the larger
- * agricultural traders. An unmapped code falls back to `"reporter <n>"`, which is honest: it
- * says a country reported this and that we cannot name it, instead of inventing one.
- */
-const M49 = {
-  4: "Afghanistan", 8: "Albania", 12: "Algeria", 32: "Argentina", 36: "Australia",
-  40: "Austria", 50: "Bangladesh", 56: "Belgium", 68: "Bolivia", 76: "Brazil",
-  100: "Bulgaria", 104: "Myanmar", 116: "Cambodia", 120: "Cameroon", 124: "Canada",
-  144: "Sri Lanka", 152: "Chile", 156: "China", 170: "Colombia", 188: "Costa Rica",
-  191: "Croatia", 196: "Cyprus", 203: "Czechia", 208: "Denmark", 218: "Ecuador",
-  222: "El Salvador", 231: "Ethiopia", 246: "Finland", 251: "France", 268: "Georgia",
-  276: "Germany", 288: "Ghana", 300: "Greece", 320: "Guatemala", 344: "Hong Kong",
-  348: "Hungary", 356: "India", 360: "Indonesia", 364: "Iran", 372: "Ireland",
-  376: "Israel", 381: "Italy", 384: "Côte d'Ivoire", 392: "Japan", 398: "Kazakhstan",
-  400: "Jordan", 404: "Kenya", 410: "South Korea", 414: "Kuwait", 428: "Latvia",
-  440: "Lithuania", 442: "Luxembourg", 458: "Malaysia", 484: "Mexico", 504: "Morocco",
-  508: "Mozambique", 516: "Namibia", 528: "Netherlands", 554: "New Zealand",
-  566: "Nigeria", 579: "Norway", 586: "Pakistan", 591: "Panama", 604: "Peru",
-  608: "Philippines", 616: "Poland", 620: "Portugal", 634: "Qatar", 642: "Romania",
-  643: "Russia", 682: "Saudi Arabia", 686: "Senegal", 702: "Singapore",
-  703: "Slovakia", 705: "Slovenia", 710: "South Africa", 724: "Spain", 752: "Sweden",
-  757: "Switzerland", 764: "Thailand", 788: "Tunisia", 792: "Türkiye", 800: "Uganda",
-  804: "Ukraine", 784: "United Arab Emirates", 826: "United Kingdom",
-  834: "Tanzania", 840: "United States", 858: "Uruguay", 860: "Uzbekistan",
-  704: "Viet Nam", 887: "Yemen", 894: "Zambia", 716: "Zimbabwe",
-};
-
-/** ⚠️ Never guesses. An unknown code is reported as an unknown code. */
-function countryName(code) {
-  return M49[code] ?? `reporter ${code}`;
-}
 
 /**
  * Run one planned lookup.
