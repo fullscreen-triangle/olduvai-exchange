@@ -115,6 +115,40 @@ const SOURCES = {
     note:
       "⭐ A track crossing the area is a direction, not a place. The observation says the holding lies near the line and says nothing about where along it — the two reported points are a sample of a flight path, not its extent, so the constraint extends beyond both ends. This is one more noisy instrument that happened to pass overhead, not a check on anything.",
   },
+  /**
+   * ⭐ Added because the GPS entry above is the only `fix` source, and it answers for nobody
+   * who cannot get a GPS fix — indoors, under cloud, on a feature phone, or with location
+   * services switched off. In every one of those cases each page falls back to the uninformed
+   * 200 km prior, which is the state the participant reported as *"the system does not know my
+   * position"*. A 3 km tower fix is not a good position and is enormously better than none.
+   */
+  cell: {
+    label: "Cell tower",
+    // ⭐ `fix`, the same variant GPS produces — a point with a sigma, not a new shape. The
+    // difference between the two is entirely in the sigma, which is what the filter weights
+    // by, so no special case is needed anywhere downstream for a coarse fix to behave
+    // correctly against a fine one.
+    constrains: "fix",
+    /**
+     * ⚠️ **`third_party`, not `instrument`, and the distinction is the point of the field.**
+     *
+     * `provenance.rs` documents `Instrument` as *"read from a device: a scale, a sensor, a GPS
+     * trace"* and `ThirdParty` as *"attested by another participant with no stake in this
+     * transaction"*. Nothing here reads a device. A handset reports which mast it is attached
+     * to, and OpenCellID — a crowd-sourced database — asserts where that mast stands. That is
+     * an attestation, and the enum's ordering places it below `Instrument` deliberately.
+     *
+     * ⚠️ Recording it as `instrument` would rank a database lookup level with a GPS trace in
+     * the evidential ordering the enum doc warns "must not be reordered casually". This is
+     * precisely the case that ordering was authored to separate.
+     */
+    source: "third_party",
+    units: { latitude: "deg", longitude: "deg", range: "m" },
+    envKey: "OPENCELLID_API_KEY",
+    sigma: "half the tower's reported cell radius, floored at 1 m — typically 1 to 10 km",
+    note:
+      "A position derived from the cell tower a handset is attached to, via OpenCellID. ⚠️ It locates the *tower*, not the participant: a mast serves everyone in its cell, so the honest reading is 'somewhere within a few kilometres of this mast'. The reported cell radius is halved before use as a sigma, because a radius is closer to a bound than to a standard deviation and an overconfident coarse fix would outweigh a genuine GPS one and drag the estimate onto a mast.",
+  },
   gps: {
     label: "GPS",
     constrains: "fix",

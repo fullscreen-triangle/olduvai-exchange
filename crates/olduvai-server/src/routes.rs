@@ -387,6 +387,15 @@ const SOURCES: &[(&str, &[&str])] = &[
     ("satellites", &["within"]),
     ("flights", &["corridor"]),
     ("gps", &["fix"]),
+    // ⭐ `cell` submits a `fix`, the same shape as `gps`, and that is not a loosening. The two
+    // differ entirely in their sigma — kilometres against metres — and sigma is what the filter
+    // weights by, so a coarse fix needs no separate shape to behave correctly against a fine one.
+    //
+    // ⚠️ What it does *not* share with `gps` is provenance: a tower fix is `Source::ThirdParty`,
+    // because a crowd-sourced database asserting where a mast stands is an attestation and not a
+    // device reading. That distinction is carried on the observation itself, not in this table,
+    // which governs shape alone.
+    ("cell", &["fix"]),
 ];
 
 fn allowed_shapes(source: &str) -> Option<Vec<&'static str>> {

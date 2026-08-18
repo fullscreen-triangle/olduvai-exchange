@@ -430,6 +430,115 @@ export const SOURCES = {
       };
     },
   },
+
+  /**
+   * ⭐ Nasdaq Data Link — a spot price to sit beside Comtrade's volumes.
+   *
+   * `trade` answers *how much of this was bought*, which is the shape of the market. It cannot
+   * answer *what is it worth*, and that gap has been filled until now by an arithmetic quotient:
+   * `market.js` divides reported value by reported weight and labels the result **implied**,
+   * with a paragraph explaining that it mixes grades, contract terms and freight across a whole
+   * year and cannot be quoted to a counterparty. That caveat is honest and it is also a
+   * confession — a seller asking what their three tonnes are worth is handed a number that is
+   * not a price, because no price was available.
+   *
+   * ⭐ This is a price: an IMF monthly commodity series, published, dated, one number with a
+   * unit. It does not replace the implied figure — the two disagree for real reasons, and both
+   * shown is more informative than either alone.
+   *
+   * # ⚠️ Two things this must not be read as
+   *
+   * **It is not an offer, and it is not local.** These are international benchmark series
+   * quoted at a reference port in USD. A grower's gate price is that minus transport, minus
+   * handling, minus the buyer's margin, and adjusted for a grade nobody here has assessed. The
+   * lines below say so in the same breath as the number, because a bare "275 USD per tonne" is
+   * read as what someone will pay you.
+   *
+   * ⚠️ **It is monthly, not live.** The IMF tables settle a month at a time, so the most recent
+   * observation can be several weeks old. The date is stated inside the line rather than in a
+   * footnote, since a stale price presented as current is worse than no price.
+   *
+   * # ⚠️ The provider blocks unauthenticated requests, measured
+   *
+   * Both `data.nasdaq.com` and the older `www.quandl.com` host answered **HTTP 403** with an
+   * Incapsula bot-challenge page on every keyless probe — `/api/v3/datasets/ODA/PMAIZMT_USD.json`
+   * and the `datatables` spelling alike. So unlike every other source in this registry, this one
+   * **could not be verified without a key**, and `envKey` is what keeps that honest: with no key
+   * configured it reports `no NASDAQ_API_KEY configured` and is never called.
+   *
+   * ⚠️ A 403 *with* a key is therefore ambiguous — a rejected key and a bot wall look identical
+   * from here — so that status is reported with both readings rather than guessed at.
+   */
+  prices: {
+    label: "Nasdaq Data Link (IMF primary commodity prices)",
+    about:
+      "International benchmark spot price for a commodity, monthly, in USD per tonne. Use for what a commodity is worth, not for what a local buyer will pay.",
+    needs: ["commodity"],
+    envKey: "NASDAQ_API_KEY",
+    async fetch({ commodity }) {
+      const series = PRICE_SERIES[commodity];
+      if (!series) {
+        return {
+          ok: false,
+          reason:
+            `no price series is declared for "${commodity}" (priced here: ` +
+            `${Object.keys(PRICE_SERIES).join(", ")})`,
+        };
+      }
+
+      // ⚠️ The key goes in a header, not the query string. The provider documents `?api_key=`,
+      // which works and also writes the credential into every proxy log, referrer and error
+      // message between here and them. No source in this file puts a secret in a URL.
+      const url = `https://data.nasdaq.com/api/v3/datasets/${series.code}.json?limit=1`;
+      const r = await get(url, { headers: { "x-api-key": process.env.NASDAQ_API_KEY } });
+
+      if (!r.ok) {
+        // ⚠️ See the doc above: 403 is genuinely ambiguous here, so both readings are stated.
+        if (r.reason === "HTTP 403") {
+          return {
+            ok: false,
+            reason:
+              "the price service refused the request (HTTP 403) — either the key was rejected " +
+              "or the provider's bot protection blocked it, and the two are indistinguishable from here",
+          };
+        }
+        return { ok: false, reason: r.reason };
+      }
+
+      /**
+       * ⚠️ The shape is `{dataset: {data: [[date, value], ...], column_names: [...]}}` — an array
+       * of positional arrays, not objects. Nothing names the columns except `column_names`, so
+       * the value's index is read from there rather than assumed to be 1.
+       */
+      const ds = r.body?.dataset;
+      const row = Array.isArray(ds?.data) ? ds.data[0] : null;
+      if (!Array.isArray(row)) return { ok: false, reason: "the price service returned no observations" };
+
+      const cols = Array.isArray(ds?.column_names) ? ds.column_names : [];
+      const found = cols.findIndex((c) => /value/i.test(String(c)));
+      const value = Number(row[found > 0 ? found : 1]);
+      const date = row[0];
+
+      if (!Number.isFinite(value)) {
+        return { ok: false, reason: "the latest observation carried no value" };
+      }
+
+      return {
+        ok: true,
+        lines: [
+          `${series.label} benchmark price: ${value.toFixed(2)} ${series.unit}, for ${date}.`,
+          // ⚠️ Unconditional, and phrased as a prohibition rather than a hedge. `facts.js`
+          // records why at length: a conditional instruction to a 3b model does not survive the
+          // trip. This is the exact number a seller will otherwise multiply by their tonnage and
+          // read as revenue.
+          `⚠️ That is an international benchmark quoted at a reference port and published monthly — ` +
+            `not an offer, not a local price, and not what a buyer pays at the farm gate. Transport, ` +
+            `handling, grade and the buyer's margin all come off it, and this exchange holds none of ` +
+            `those figures — do not estimate them.`,
+        ],
+      };
+    },
+  },
 };
 
 /**
@@ -439,6 +548,43 @@ export const SOURCES = {
  */
 
 
+
+/**
+ * Benchmark price series this exchange associates with a commodity.
+ *
+ * ⭐ Declared, like `COMMODITIES` and `EXTRACTS`, and for the same reason each of those gives:
+ * a model asked to name a series code will emit a plausible one, and the provider will answer
+ * a plausible wrong code with a real, dated, confident price for a different good. `PMAIZMT`
+ * and `PWHEAMT` differ by three characters and by about 60 USD per tonne.
+ *
+ * ⚠️ **The table is deliberately shorter than `COMMODITIES`.** The IMF publishes primary
+ * commodity prices, so grains and softs are covered and chamomile is not — there is no world
+ * benchmark for chamomile flower, and inventing a proxy (tea? herbs?) would be the same error
+ * as guessing an HS code. A commodity absent here reports that it is not priced, which is a
+ * true statement about the world rather than a gap in this file.
+ *
+ * ⚠️ **Units are not uniform and are carried per row rather than assumed.** The IMF quotes
+ * cereals in USD per tonne but coffee and cotton in **US cents per pound**, and multiplying a
+ * cotton figure by a tonnage would overstate the consignment by a factor of about twenty. The
+ * unit string is printed verbatim beside the number; nothing here converts between them,
+ * because a conversion this file performed silently is one a reader cannot check.
+ *
+ * ⚠️ Every code below is **unverified against the live API** — the provider returned 403 to
+ * every keyless probe (see `prices` above), so these are written from the IMF's published
+ * series naming and must be confirmed once a key exists. A wrong code fails loudly with
+ * "no observations", not silently with a wrong number, which is why shipping them unverified
+ * is acceptable and shipping a guessed *unit* would not be.
+ */
+const PRICE_SERIES = {
+  maize: { code: "ODA/PMAIZMT_USD", label: "Maize (US, No. 2 Yellow, FOB Gulf)", unit: "USD per tonne" },
+  wheat: { code: "ODA/PWHEAMT_USD", label: "Wheat (US, No. 2 Hard Red Winter, FOB Gulf)", unit: "USD per tonne" },
+  soybeans: { code: "ODA/PSOYB_USD", label: "Soybeans (US, CIF Rotterdam)", unit: "USD per tonne" },
+  sugar: { code: "ODA/PSUGAISA_USD", label: "Sugar (ISA daily price, raw)", unit: "US cents per pound" },
+  coffee: { code: "ODA/PCOFFOTM_USD", label: "Coffee (other milds, arabica)", unit: "US cents per pound" },
+  tea: { code: "ODA/PTEA_USD", label: "Tea (Mombasa auction)", unit: "US cents per kilogram" },
+  cotton: { code: "ODA/PCOTTIND_USD", label: "Cotton (Cotlook A index)", unit: "US cents per pound" },
+  groundnuts: { code: "ODA/PGNUTS_USD", label: "Groundnuts (US, runners 40/50, CIF Rotterdam)", unit: "USD per tonne" },
+};
 
 /**
  * Compounds this exchange associates with a crop.
