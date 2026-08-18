@@ -1,4 +1,5 @@
 import EdgeSidebar from "@/components/EdgeSidebar";
+import PositionBootstrap from "@/components/PositionBootstrap";
 import TransitionEffect from "@/components/TransitionEffect";
 import { LEFT_RAIL, RIGHT_RAIL } from "@/lib/navigation";
 import Head from "next/head";
@@ -45,6 +46,12 @@ export default function DashboardLayout({ title, children }) {
           </p>
         }
       />
+
+      {/* ⭐ Mounted in the frame rather than on a page, because it must run once per session and
+          not once per page. Every left-rail view is centred on a folded position, so acquiring
+          one is a property of being in the dashboard at all — not of having navigated to the one
+          page that happened to carry the button. */}
+      <PositionBootstrap />
 
       {children}
     </>

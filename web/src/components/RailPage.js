@@ -31,6 +31,22 @@ export default function RailPage({ children }) {
   const router = useRouter();
   const entry = findEntry(router.pathname);
   const [state, setState] = useState({ status: "loading" });
+  /**
+   * ⚠️ Bumped when a position is recorded, to re-run the fetch below.
+   *
+   * ⭐ Without this, a page open while `PositionBootstrap` acquires a fix keeps showing
+   * "nothing observed yet" until the next navigation — the data arrived and the page still
+   * reported its absence, which is the failure mode most likely to be read as "it does not
+   * work". Every left-rail view is centred on the folded position, so a new fix invalidates
+   * all of them.
+   */
+  const [generation, setGeneration] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setGeneration((n) => n + 1);
+    window.addEventListener("olduvai:position-recorded", bump);
+    return () => window.removeEventListener("olduvai:position-recorded", bump);
+  }, []);
 
   useEffect(() => {
     if (!entry) return;
@@ -54,7 +70,7 @@ export default function RailPage({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [entry]);
+  }, [entry, generation]);
 
   if (!entry) return null;
 

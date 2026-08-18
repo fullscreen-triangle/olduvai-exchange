@@ -1,3 +1,4 @@
+import { recordFix, requestPosition, sigmaFromAccuracy } from "@/lib/geolocate";
 import { useCallback, useEffect, useState } from "react";
 
 /**
@@ -45,84 +46,39 @@ export default function LocationCapture({ onSubmitted }) {
     setSupported(typeof navigator !== "undefined" && "geolocation" in navigator);
   }, []);
 
-  const capture = useCallback(() => {
+  const capture = useCallback(async () => {
     setState({ phase: "locating" });
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude, altitude, accuracy } = pos.coords;
+    // ⭐ The ask and the record both live in `lib/geolocate.js`, shared with
+    // `PositionBootstrap`. The wire body has four details that each fail opaquely — sigma from a
+    // 95% accuracy figure, metres to kilometres, a `0` rather than `null` altitude, and a Julian
+    // day rather than an ISO string — and two copies of that is one copy that drifts.
+    const got = await requestPosition();
+    if (!got.ok) {
+      setState({ phase: "failed", detail: got.detail });
+      return;
+    }
 
-        // ⭐ 95% → one sigma. See the module doc; this is the one conversion that must not be
-        // skipped. Floored at 1 m to match the engine's `min_sigma_m` bound — a browser
-        // claiming better than metre accuracy is claiming more than it can know.
-        const sigma_m = Math.max(1, (accuracy ?? 100) / 2);
+    const { latitude, longitude, accuracy } = got.position.coords;
+    setState({ phase: "submitting", latitude, longitude, sigma_m: sigmaFromAccuracy(accuracy) });
 
-        setState({ phase: "submitting", latitude, longitude, sigma_m });
+    const saved = await recordFix(got.position);
+    if (!saved.ok) {
+      setState({ phase: "failed", detail: saved.detail });
+      return;
+    }
 
-        try {
-          const r = await fetch("/api/observe/gps", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              kind: "fix",
-              at: {
-                latitude,
-                longitude,
-                // ⚠️ `Geodetic` requires `altitude_km`, and the browser reports altitude in
-                // **metres** or not at all. Converting is not optional and neither is the
-                // fallback: a missing altitude is 0 km, not `null`, because the extractor
-                // rejects the whole body otherwise and the rejection surfaces as an opaque
-                // `not_implemented` rather than a field error.
-                altitude_km: typeof altitude === "number" ? altitude / 1000 : 0,
-              },
-              sigma_m,
-              source: "instrument",
-              // Julian day. `Utc` is `#[serde(transparent)]` over an f64, so this is the wire
-              // shape the server expects — not an ISO string.
-              taken_at: pos.timestamp / 86400000 + 2440587.5,
-            }),
-          });
-
-          const body = await r.json().catch(() => null);
-
-          if (!r.ok || body?.ok === false) {
-            // ⚠️ The server's own words, when it wrote any. A generic "could not save" would
-            // hide a units or shape rejection that names exactly what is wrong.
-            setState({
-              phase: "failed",
-              detail:
-                body?.detail ??
-                `The exchange refused the observation (HTTP ${r.status}).`,
-            });
-            return;
-          }
-
-          setState({ phase: "done", latitude, longitude, sigma_m });
-          onSubmitted?.();
-        } catch {
-          setState({
-            phase: "failed",
-            detail: "The request did not reach the application server. Nothing was recorded.",
-          });
-        }
-      },
-      (err) => {
-        // ⚠️ The three cases are distinguished because the remedy differs entirely: a denied
-        // permission is undone in browser settings, a timeout is retried, and an unavailable
-        // sensor is neither. One message for all three would send people to the wrong fix.
-        const detail =
-          err.code === err.PERMISSION_DENIED
-            ? "You declined the location request. Nothing was sent. Allow location for this site in your browser settings if you want to try again."
-            : err.code === err.POSITION_UNAVAILABLE
-              ? "Your device could not determine a position. This is common indoors and on desktops without GPS."
-              : "The location request timed out before your device answered.";
-        setState({ phase: "failed", detail });
-      },
-      // ⭐ `enableHighAccuracy` because the accuracy figure becomes a sigma the filter trusts —
-      // a coarse network fix submitted as though it were GPS would understate its own error.
-      // 20 s is generous on purpose: a cold GPS fix outdoors regularly takes over 10 s.
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
-    );
+    setState({
+      phase: "done",
+      latitude: saved.latitude,
+      longitude: saved.longitude,
+      sigma_m: saved.sigma_m,
+    });
+    // ⚠️ Same event `PositionBootstrap` fires, so any rail page already open refetches. Recording
+    // a fix here and leaving the weather page reporting "nothing observed yet" would be the same
+    // defect from the manual direction.
+    window.dispatchEvent(new CustomEvent("olduvai:position-recorded"));
+    onSubmitted?.();
   }, [onSubmitted]);
 
   if (!supported) {

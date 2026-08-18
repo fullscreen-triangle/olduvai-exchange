@@ -1,0 +1,128 @@
+import { acquireAndRecord } from "@/lib/geolocate";
+import { useEffect, useRef, useState } from "react";
+
+/**
+ * Get a position into the log automatically, once, on entering the dashboard.
+ *
+ * # ⭐ Why this exists
+ *
+ * Every context page — weather, terrain — is centred on a folded position, and refuses to draw
+ * anything when the log is empty. That refusal is correct: sampling a 90 m DEM around a 200 km
+ * prior would show a precision nobody measured. But the *only* way to fill the log was a button
+ * on one page in the left rail, so the ordinary experience was: open the dashboard, ask for the
+ * weather, wait, and be told the system does not know where you are.
+ *
+ * ⚠️ **A gate whose remedy is undiscoverable is indistinguishable from a broken feature.** The
+ * pages were honest and the product did not work. This closes that: the browser is asked on
+ * arrival, and by the time anyone opens a context page the log usually has a fix in it.
+ *
+ * # ⚠️ What this does not change
+ *
+ * It does **not** relax any gate. A page still refuses to draw without a measured position, and
+ * `rests_on_observation` is still the only thing separating a real fix from the prior. This adds
+ * an observation; it does not lower the bar for what counts as one. If the browser declines, every
+ * page still says so rather than inventing a coordinate.
+ *
+ * ⭐ And it records the browser's own accuracy as sigma, unchanged. A network-derived fix at 3 km
+ * enters the log *as* 3 km, so terrain will correctly warn that the ground shown may not be the
+ * ground underfoot. Automatic acquisition changes who presses the button, not what is claimed.
+ *
+ * # ⚠️ Consent, and why asking on arrival is defensible here
+ *
+ * The browser's own permission prompt is the consent step, and it is unavoidable and unbypassable
+ * — this cannot acquire anything a person has not allowed. What this decides is only *when* the
+ * prompt appears: on entering a dashboard whose left rail is entirely made of location-derived
+ * views, rather than three clicks later. A refusal is remembered by the browser and is never
+ * re-prompted here, because `attempted` blocks a second run for the tab's lifetime.
+ */
+export default function PositionBootstrap() {
+  const attempted = useRef(false);
+  const [outcome, setOutcome] = useState(null);
+
+  useEffect(() => {
+    // ⚠️ Guarded by a ref rather than a state flag: a state update re-runs the effect body's
+    // closure and a second `getCurrentPosition` would show a second browser prompt.
+    if (attempted.current) return undefined;
+    attempted.current = true;
+
+    let cancelled = false;
+
+    (async () => {
+      // ⭐ Asked first: if the log already holds a measured position there is nothing to do, and
+      // prompting anyway would be a permission dialog with no purpose. This also makes the
+      // component idempotent across navigations within a session.
+      try {
+        const r = await fetch("/api/position");
+        const body = await r.json().catch(() => null);
+        if (body?.data?.estimate?.rests_on_observation === true) return;
+      } catch {
+        // A position route that did not answer is not a reason to skip acquisition — the fix
+        // still needs recording, and the POST will report its own failure.
+      }
+
+      if (cancelled) return;
+
+      const result = await acquireAndRecord();
+      if (cancelled) return;
+
+      if (result.ok) {
+        setOutcome({ kind: "done", sigma_m: result.sigma_m });
+        // ⚠️ Pages read position during their own fetch on mount, so one already-rendered page
+        // would keep showing "nothing observed yet" until navigation. This tells them.
+        window.dispatchEvent(new CustomEvent("olduvai:position-recorded"));
+      } else {
+        setOutcome({ kind: "failed", detail: result.detail });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ⚠️ The success banner clears itself; the failure banner does not. A recorded fix is
+  // confirmation and stops being useful after a few seconds, but a declined permission explains
+  // every empty page in the left rail and should still be on screen when someone reaches one.
+  useEffect(() => {
+    if (outcome?.kind !== "done") return undefined;
+    const t = setTimeout(() => setOutcome(null), 6000);
+    return () => clearTimeout(t);
+  }, [outcome]);
+
+  // ⭐ Success is announced briefly and then gets out of the way — it states the sigma, because
+  // a 3 km fix and a 12 m fix support very different readings of every page in the left rail.
+  if (outcome?.kind === "done") {
+    return (
+      <Banner tone="ok">
+        Position recorded to about {Math.round(outcome.sigma_m)} m. Context pages are centred on it.
+      </Banner>
+    );
+  }
+
+  // ⚠️ A failure is stated rather than swallowed. Someone who declined the prompt needs to know
+  // that is why the weather page is empty, otherwise the page reads as broken.
+  if (outcome?.kind === "failed") {
+    return (
+      <Banner tone="warn">
+        {outcome.detail} Context pages that need a position will stay empty until one is recorded —
+        you can add one by hand on the Position page.
+      </Banner>
+    );
+  }
+
+  return null;
+}
+
+function Banner({ tone, children }) {
+  return (
+    <div
+      className={`fixed bottom-4 left-1/2 z-40 max-w-lg -translate-x-1/2 rounded-lg border px-4 py-2 text-center text-xs leading-relaxed backdrop-blur ${
+        tone === "ok"
+          ? "border-border bg-surface/90 text-muted"
+          : "border-amber-500/40 bg-surface/95 text-amber-200/90"
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
