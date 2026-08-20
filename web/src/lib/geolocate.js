@@ -54,18 +54,56 @@ export function requestPosition({ timeout = 20000, highAccuracy = true } = {}) {
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve({ ok: true, position: pos }),
       (err) => resolve({ ok: false, detail: describeGeolocationError(err), code: err?.code }),
-      { enableHighAccuracy: highAccuracy, timeout, maximumAge: 0 }
+      {
+        enableHighAccuracy: highAccuracy,
+        timeout,
+        // ⚠️ A cached fix is acceptable on the coarse attempt and not on the precise one:
+        // `maximumAge` is what lets the browser answer from its network-provider cache without
+        // waking a radio, and that cache is the only thing a desktop usually has.
+        maximumAge: highAccuracy ? 0 : 600000,
+      }
     );
   });
 }
 
 /**
- * Post a browser position to the observation log as `Observation::Fix`.
+ * Ask twice: precisely, then coarsely.
  *
- * ⚠️ The wire shape is verified against `crates/olduvai-core/src/fusion.rs` and must not be
- * adjusted casually — the server answers a malformed body with an opaque rejection rather than
- * a field error.
+ * # ⭐ Why one attempt was not enough
+ *
+ * The single call this replaces used `enableHighAccuracy: true` with `maximumAge: 0` — the
+ * strictest combination the API offers. On a phone outdoors it is right. On a **desktop with no
+ * GPS** it is the combination most likely to fail, because it asks the browser to ignore the
+ * network-derived fix it already holds and wait for a radio that does not exist. The module's own
+ * error text for `code 2` says so: *"common indoors and on desktops without GPS."*
+ *
+ * ⚠️ That failure was silent in effect — the dashboard recorded nothing, so every context page
+ * refused, correctly, and the whole product read as blank. The gate was never wrong; the
+ * acquisition never got past its first and hardest attempt.
+ *
+ * ⭐ The retry is coarse *and says so*: a network fix arrives with an accuracy of kilometres and
+ * enters the log at that sigma unchanged, so terrain still warns the ground shown may not be the
+ * ground underfoot. A worse fix is recorded as a worse fix; nothing is upgraded by being second.
+ *
+ * ⚠️ A **denial is not retried.** `code 1` is the participant saying no, and asking again with
+ * different options is how a permission prompt becomes nagging. Only unavailability and timeout
+ * — the two failures that are about the hardware rather than the person — fall through.
  */
+export async function requestPositionWithFallback() {
+  const precise = await requestPosition({ timeout: 12000, highAccuracy: true });
+  if (precise.ok) return precise;
+
+  // ⚠️ code 1 is PERMISSION_DENIED. Retrying it would re-prompt someone who already declined.
+  if (precise.code === 1) return precise;
+
+  const coarse = await requestPosition({ timeout: 15000, highAccuracy: false });
+  if (coarse.ok) return coarse;
+
+  // ⚠️ The first failure is reported, not the second: "could not determine a position" is more
+  // informative than the timeout the coarse retry usually ends in.
+  return precise;
+}
+
 export async function recordFix(pos) {
   const { latitude, longitude, altitude, accuracy } = pos.coords;
   const sigma_m = sigmaFromAccuracy(accuracy);
@@ -109,7 +147,7 @@ export async function recordFix(pos) {
 
 /** Ask, then record. Resolves `{ok, ...}` and never rejects. */
 export async function acquireAndRecord(options) {
-  const got = await requestPosition(options);
+  const got = options ? await requestPosition(options) : await requestPositionWithFallback();
   if (!got.ok) return got;
   return recordFix(got.position);
 }

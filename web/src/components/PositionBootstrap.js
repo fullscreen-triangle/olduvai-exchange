@@ -62,11 +62,35 @@ export default function PositionBootstrap() {
 
       if (cancelled) return;
 
-      const result = await acquireAndRecord();
+      let result = await acquireAndRecord();
       if (cancelled) return;
 
+      /**
+       * ⭐ The floor beneath the browser. If the browser answered nothing — declined, no radio,
+       * timed out on both the precise and the coarse attempt — the log would otherwise stay empty
+       * and every context page would refuse. This asks the server to derive a city-level position
+       * from the network address instead.
+       *
+       * ⚠️ It is genuinely a **last** resort and is ordered as one: it runs only after both
+       * browser attempts have failed, so anyone whose browser works never reaches it and never has
+       * a 10 km circle in their log. And it is not silent — the banner below names it.
+       */
+      if (!result.ok) {
+        const net = await fetch("/api/observe/network", { method: "POST" });
+        const body = await net.json().catch(() => null);
+        if (cancelled) return;
+        if (net.ok && body?.network) {
+          result = {
+            ok: true,
+            sigma_m: body.network.sigma_m,
+            coarse: true,
+            label: body.network.label,
+          };
+        }
+      }
+
       if (result.ok) {
-        setOutcome({ kind: "done", sigma_m: result.sigma_m });
+        setOutcome({ kind: "done", sigma_m: result.sigma_m, coarse: result.coarse, label: result.label });
         // ⚠️ Pages read position during their own fetch on mount, so one already-rendered page
         // would keep showing "nothing observed yet" until navigation. This tells them.
         window.dispatchEvent(new CustomEvent("olduvai:position-recorded"));
@@ -84,7 +108,8 @@ export default function PositionBootstrap() {
   // confirmation and stops being useful after a few seconds, but a declined permission explains
   // every empty page in the left rail and should still be on screen when someone reaches one.
   useEffect(() => {
-    if (outcome?.kind !== "done") return undefined;
+    // ⚠️ Only a precise fix self-clears — see the coarse branch below for why.
+    if (outcome?.kind !== "done" || outcome.coarse) return undefined;
     const t = setTimeout(() => setOutcome(null), 6000);
     return () => clearTimeout(t);
   }, [outcome]);
@@ -92,6 +117,23 @@ export default function PositionBootstrap() {
   // ⭐ Success is announced briefly and then gets out of the way — it states the sigma, because
   // a 3 km fix and a 12 m fix support very different readings of every page in the left rail.
   if (outcome?.kind === "done") {
+    /**
+     * ⚠️ A network-derived position is announced differently, and the banner does **not** clear
+     * itself for it. A 10 km circle around a city explains every subsequent page — why terrain is
+     * warning, why weather is regional — and someone who never saw it stated would read those as
+     * defects. It also names the city, which is the one claim a participant can immediately
+     * check and reject.
+     */
+    if (outcome.coarse) {
+      return (
+        <Banner tone="warn">
+          Your browser could not determine a position, so one was derived from your network
+          address{outcome.label ? ` — ${outcome.label}` : ""}. ⚠️ It is recorded with a 10 km
+          sigma, so pages will be centred roughly and will say so. Record a fix on the Position
+          page and it will immediately take over.
+        </Banner>
+      );
+    }
     return (
       <Banner tone="ok">
         Position recorded to about {Math.round(outcome.sigma_m)} m. Context pages are centred on it.
