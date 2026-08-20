@@ -13,7 +13,7 @@ import { locateCell, towerObservation } from "@/lib/api/opencellid";
  *
  * ⚠️ A handset does **not** know where its tower is. It knows four integers naming the cell,
  * and turning those into a coordinate requires a database and a key. That lookup cannot happen
- * in the browser without shipping `OPENCELLID_API_KEY` to every visitor, so it happens here —
+ * in the browser without shipping an OpenCellID key to every visitor, so it happens here —
  * which makes this a route that *constructs* an observation rather than one that forwards one.
  * Mixing that into the pass-through route would have made a table of declarations into a table
  * of special cases.
@@ -60,7 +60,7 @@ export default async function handler(req, res) {
    * ⚠️ **502, not 400.** The request was well formed; the provider could not answer it — an
    * unknown tower, a rejected key, or a timeout. Reporting that as the participant's error
    * would send someone to re-check four numbers that were correct. `reason` carries the
-   * provider's own words, including `no OPENCELLID_API_KEY configured` when the key is absent,
+   * provider's own words, including `no OpenCellID key configured` when the key is absent,
    * so the missing-key case is legible instead of looking like an outage.
    */
   if (!tower.ok) {
