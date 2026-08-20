@@ -1,4 +1,5 @@
 import RailPage from "@/components/RailPage";
+import ReadingsList from "@/components/ReadingsList";
 
 /**
  * What passes overhead, propagated from published elements.
@@ -9,5 +10,5 @@ import RailPage from "@/components/RailPage";
  * lifted from a third party's globe widget would not be.
  */
 export default function Page() {
-  return <RailPage />;
+  return <RailPage>{(data) => <ReadingsList data={data} label="overpass" />}</RailPage>;
 }

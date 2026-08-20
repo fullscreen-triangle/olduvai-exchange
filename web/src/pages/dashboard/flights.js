@@ -1,4 +1,5 @@
 import RailPage from "@/components/RailPage";
+import ReadingsList from "@/components/ReadingsList";
 
 /**
  * Tracks crossing the area.
@@ -8,5 +9,5 @@ import RailPage from "@/components/RailPage";
  * thats all."* This page shows a direction, not a place, and the declaration says so.
  */
 export default function Page() {
-  return <RailPage />;
+  return <RailPage>{(data) => <ReadingsList data={data} label="track" />}</RailPage>;
 }

@@ -1,4 +1,5 @@
 import RailPage from "@/components/RailPage";
+import ReadingsList from "@/components/ReadingsList";
 
 /**
  * Fixes recorded on a handset or receiver, each with its stated accuracy.
@@ -8,5 +9,5 @@ import RailPage from "@/components/RailPage";
  * accuracy the device claimed and floored at one metre (note 33 §7).
  */
 export default function Page() {
-  return <RailPage />;
+  return <RailPage>{(data) => <ReadingsList data={data} label="GPS" />}</RailPage>;
 }

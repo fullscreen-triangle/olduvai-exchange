@@ -259,3 +259,90 @@ layer.
 ⚠️ The rule going forward: **reject an implementation, name the replacement in the same
 paragraph.** If no replacement can be named, then the objection is to the *idea*, and that
 should be said plainly — as §6 does — rather than left to look like a pending task.
+
+---
+
+## 9. Measured: the tabs were preloading all along
+
+**2026-08-20.** The report was *"for all the tabs on the dashboard, the information is supposed
+to be preloaded… my position is supposed to be already on a map, that is already rendered, so is
+my terrain, my traffic, the satellites around."* ⚠️ **The premise about preloading was already
+satisfied, and the pages were still empty for two other reasons.** Recording the distinction
+because acting on the stated diagnosis would have rebuilt a fetch layer that already works.
+
+### 9.1 What was already there
+
+- `RailPage` fetches its endpoint in a `useEffect` **on mount**. Nothing waits for a click.
+- `PositionBootstrap` acquires position on dashboard entry and dispatches
+  `olduvai:position-recorded`; `RailPage` listens and re-fetches on it.
+- Every endpoint answers fast. Measured on the deployed server: `/api/position` 8 ms,
+  `/api/feeds/terrain` 26 ms, `/api/feeds/weather` 35 ms, `/api/observe/gps` **5 ms**.
+
+### 9.2 Fault one — four pages discarded the data they fetched
+
+`RailPage` renders `{state.status === "ready" && children?.(state.data)}`. `gps.js`,
+`satellites.js`, `flights.js` and `traffic.js` were each exactly `return <RailPage />;` — **no
+render-prop child**, so `children?.()` had nothing to call.
+
+⚠️ **GPS is the sharpest case and the one that proves the diagnosis:** it returned a real reading
+in 5 ms and drew a declaration table and nothing else. A page that fetches successfully and
+renders nothing is *indistinguishable to the reader* from a page that never fetched — which is
+exactly why it was reported as a preloading failure. ⭐ The lesson generalises: a missing renderer
+and a missing fetch look identical from the outside, so the visible symptom cannot identify
+which one it is.
+
+Fixed by `components/ReadingsList.js` (gps, satellites, flights — they share the `readings`
+shape) and `components/TrafficList.js` (traffic returns incidents, a different shape).
+
+### 9.3 Fault two — three sources had nothing to render
+
+Renderers cannot invent data. Separately from §9.2:
+
+| source | state | resolution |
+|---|---|---|
+| traffic | key present, **client unwritten** | ✅ `lib/api/tomtom.js`, this note |
+| satellites | `readings: []`, no TLE ingestion | ⬜ open, see §9.5 |
+| flights | `readings: []`, no provider | ⬜ open |
+
+### 9.4 Traffic: the key was never the problem
+
+Note 37's earlier entry records the `OLDUVAI_TRAFFIC_API_KEY` → `TOMTOM_API_KEY` rename, which
+made the key *found* and moved the route to *"what is missing is the client that calls it."*
+That client now exists.
+
+⭐ **Probed before writing, not after.** `GET /traffic/services/5/incidentDetails` over a 0.2° box
+around Harare with the deployed key: **HTTP 200 `{"incidents":[]}`**. So the key is accepted, and
+**an empty array is a normal answer** — quiet roads, not an outage. `fetchIncidents` returns that
+as `ok: true` with zero incidents, and `TrafficList` says *"roads clear"* naming the box it looked
+in. ⚠️ Collapsing that into a blank panel would have made ordinary quiet roads look like the
+failure this whole note is about.
+
+⚠️ `bbox` is `minLon,minLat,maxLon,maxLat` — **longitude first**, unlike every other coordinate
+in this codebase. Transposing it returns a well-formed 200 for a box in the wrong hemisphere,
+which presents as "there is never any traffic here".
+
+### 9.5 Satellites needs an engine change, not a renderer
+
+`crates/olduvai-core/src/orbit.rs` already holds the whole computation: `Tle::parse`,
+`propagate`, `look_angles`, `overpass_windows`, plus `MAX_USEFUL_AGE_DAYS = 14.0` and
+`tle_epoch_age_days` on every result. ⭐ **Nothing mathematical is missing.**
+
+What is missing is ingestion, and it belongs in the **engine**, not the BFF — the propagator is
+Rust and the overpass depends on the participant's folded position, which only the engine holds.
+Celestrak was probed and is viable: `gp.php?GROUP=resource&FORMAT=tle`, **keyless, HTTP 200,
+1.3 s, 28 kB**, epoch current to the day.
+
+⚠️ Per `routes.rs`: satellites submits **`within`**, not an overpass — *"an overpass is not an
+observation of the participant at all — it is the window in which a sensor could have seen them."*
+The ingestion must record the element set and the timestamp so the pass is recomputable.
+
+### 9.6 Incidental: the server env file was CRLF-terminated
+
+Seven values transferred by `scp` from Windows carried a trailing `\r`; the five written on the
+server did not. ⚠️ **Next's dotenv parser strips it, so the runtime was never affected** — verified
+by finding the inlined Mapbox token terminating cleanly in the built bundle. But `$(sed …)` in a
+shell preserves it, and a `curl` probe of TomTom failed with `URL rejected: Malformed input`
+before this was understood. Normalised on the server, backup kept as `.env.production.local.crlf.bak`.
+
+⭐ Worth recording because the failure mode is *a credential that works in the application and
+breaks in every shell probe of it* — which reads as a bad key and is not one.

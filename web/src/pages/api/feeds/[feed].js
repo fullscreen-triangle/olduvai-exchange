@@ -2,6 +2,7 @@ import { methodNotAllowed, fail, notImplemented, forward } from "@/lib/api/upstr
 import { authHeaders, readSession } from "@/lib/api/session";
 import { fetchWeatherGrid, RESOLUTION_DEG, RESOLUTION_M } from "@/lib/api/openmeteo";
 import { fetchElevationGrid, DEM_STEP_DEG, DEM_STEP_M } from "@/lib/api/elevation";
+import { fetchIncidents } from "@/lib/api/tomtom";
 
 /**
  * External context feeds: weather, traffic, prices, advisories.
@@ -201,10 +202,15 @@ export default async function handler(req, res) {
   // stamped `source: spec.source` on the way out. Do not let a provider's own confidence
   // field become `source`; the provider is asserting, whatever it calls itself.
   //
-  // ⭐ Reached by `traffic` now that its `envKey` names the key that is actually set. The note
-  // says which half is missing, because "no provider configured" would send someone to buy a
-  // credential they already hold — and the declaration goes out too, so the page renders its
-  // real units and provenance rather than an empty card.
+  // ⭐ A table, matching the keyless dispatch above. `traffic` is the first entry: its key was
+  // always present, and what was missing was this client — which is what the fallback below
+  // said, and what `lib/api/tomtom.js` now supplies.
+  const keyed = { traffic }[feed];
+  if (keyed) return keyed(req, res, spec, feed);
+
+  // ⭐ Still reachable, and still the right answer for `prices` and `advisories`: a key exists
+  // but nothing calls it. The note must not say "no provider configured" — that would send
+  // someone to buy a credential they already hold.
   return notImplemented(res, {
     blockedBy: "no-provider",
     note: `A ${spec.label.toLowerCase()} credential is present, so the provider question is settled — what is missing is the client that calls it, which is unwritten. Nothing is wrong with the key.`,
@@ -432,6 +438,65 @@ async function terrain(req, res, spec, feed) {
         // ⭐ The fact that governs how the rest should be read. See the doc above.
         sigma_exceeds_sample:
           typeof sigma_m === "number" ? sigma_m > dem.sample_deg * 111_320 : null,
+      },
+    },
+  });
+}
+
+/**
+ * The traffic feed: road incidents around wherever the participant actually is.
+ *
+ * ⭐ Uses the same `locate()` as weather and terrain, for the same reason and with the same four
+ * checks. ⚠️ The check that matters is `rests_on_observation`: the uninformed prior is 200 km
+ * wide, and a box of incidents drawn around it would list obstructions across half a province as
+ * though they were on the participant's road.
+ *
+ * ⚠️ Unlike the other two, this feed's emptiness is usually *true*. Weather and terrain always
+ * have a value at a point; a quiet road genuinely has no incidents. So a zero-length list is
+ * returned as `ok` with a real declaration, and the page says the roads are clear — it does not
+ * borrow the "no provider" gate to describe an ordinary Tuesday.
+ */
+async function traffic(req, res, spec, feed) {
+  const declaration = {
+    feed,
+    label: spec.label,
+    source: spec.source,
+    units: spec.units,
+    readings: [],
+  };
+
+  const located = await locate(req, declaration, { centredOn: "The traffic box" });
+  if (!located.ok) return notImplemented(res, located.response);
+  const { at, estimate } = located;
+
+  const incidents = await fetchIncidents({ latitude: at.latitude, longitude: at.longitude });
+
+  if (!incidents.ok) {
+    return notImplemented(res, {
+      blockedBy: "upstream-unreachable",
+      upstream: incidents.reason,
+      // ⚠️ The provider's outage, not "no traffic". Reporting clear roads because the provider
+      // was unreachable is the one error here with a real cost attached to it.
+      note: `TomTom did not answer (${incidents.reason}). Nothing is known about the roads either way; this page could not retrieve it.`,
+      declaration,
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    data: {
+      incidents: incidents.incidents,
+      box: incidents.box,
+      declaration: {
+        ...declaration,
+        // ⭐ Stamped from `spec`, never from the provider. The rule at the top of this file.
+        source: spec.source,
+        readings: incidents.incidents,
+        centre: {
+          latitude: at.latitude,
+          longitude: at.longitude,
+          sigma_m: estimate.sigma_m ?? null,
+        },
       },
     },
   });
