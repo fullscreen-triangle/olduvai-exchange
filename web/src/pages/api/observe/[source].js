@@ -144,7 +144,11 @@ const SOURCES = {
      */
     source: "third_party",
     units: { latitude: "deg", longitude: "deg", range: "m" },
-    envKey: "OPENCELLID_API_KEY",
+    // ⚠️ An array, not a string: the supplied key is spelled `OPENCELL_ID_API_KEY` and this
+    // file was written against `OPENCELLID_API_KEY`. `lib/api/opencellid.js` documents why both
+    // are accepted rather than one being declared canonical. If they disagreed, this page would
+    // report "no provider" for a key that the client can read — the worst of both.
+    envKey: ["OPENCELLID_API_KEY", "OPENCELL_ID_API_KEY"],
     sigma: "half the tower's reported cell radius, floored at 1 m — typically 1 to 10 km",
     note:
       "A position derived from the cell tower a handset is attached to, via OpenCellID. ⚠️ It locates the *tower*, not the participant: a mast serves everyone in its cell, so the honest reading is 'somewhere within a few kilometres of this mast'. The reported cell radius is halved before use as a sigma, because a radius is closer to a bound than to a standard deviation and an overconfident coarse fix would outweigh a genuine GPS one and drag the estimate onto a mast.",
@@ -160,6 +164,22 @@ const SOURCES = {
       "Fixes recorded on a handset or receiver, each with the accuracy the device reported. ⚠️ A receiver claiming centimetre accuracy over a farm is floored at one metre before use: such a claim takes the filter's gain to 1.0 and erases every other observation, and a source claiming it is more likely misconfigured than exceptional.",
   },
 };
+
+/**
+ * Is a source's credential present?
+ *
+ * ⚠️ `envKey` may be a single name or a list of accepted spellings. The list exists because a
+ * key supplied under one name and read under another is invisible from both sides — each file is
+ * internally consistent — and the page then reports `no-provider` for a credential that was
+ * given. `lib/api/opencellid.js` carries the full account; this is the enforcement of it.
+ */
+function keyPresent(envKey) {
+  const names = Array.isArray(envKey) ? envKey : [envKey];
+  return names.some((n) => {
+    const v = process.env[n];
+    return typeof v === "string" && v.trim().length > 0;
+  });
+}
 
 export default async function handler(req, res) {
   // ⚠️ `POST` is accepted now that `/v1/observe/:source` exists upstream. The two verbs are
@@ -230,7 +250,7 @@ export default async function handler(req, res) {
   const gate = unreachable
     ? "upstream-unreachable"
     : spec.envKey
-      ? process.env[spec.envKey]
+      ? keyPresent(spec.envKey)
         ? null
         : "no-provider"
       : source === "satellites"

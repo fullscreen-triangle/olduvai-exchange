@@ -57,6 +57,45 @@ export function sigmaFromRange(range) {
 }
 
 /**
+ * ⭐ The names this module will accept an OpenCellID key under.
+ *
+ * # ⚠️ Why two names and not one
+ *
+ * The provider brands itself *OpenCellID* — one word — so `OPENCELLID_API_KEY` is the spelling
+ * this file was written against. The key that was actually supplied is spelled
+ * `OPENCELL_ID_API_KEY`, with the underscore a reader hears in "open cell id". Both readings are
+ * reasonable and neither is wrong, so this accepts both rather than declaring one canonical and
+ * making the other a silent failure.
+ *
+ * ⚠️ **This is the second occurrence of one bug.** `pages/api/feeds/[feed].js` records that
+ * `traffic` read an `OLDUVAI_TRAFFIC_API_KEY` that no file set while the credential sat in
+ * `.env.local` under the provider's own name — a route reporting *no key configured* on a feed
+ * whose key had been supplied. That is exactly what happened here, and the participant was told
+ * their key was missing when they had provided it. A name mismatch is invisible from both sides:
+ * the file that sets the variable and the file that reads it are each internally consistent.
+ *
+ * ⭐ Accepting a set is therefore the fix and not a workaround. The cost is one array; the
+ * failure it removes cannot be found by reading either file alone.
+ */
+const KEY_NAMES = ["OPENCELLID_API_KEY", "OPENCELL_ID_API_KEY"];
+
+/**
+ * The first of `KEY_NAMES` that is set, or `null`.
+ *
+ * ⚠️ `process.env` cannot be indexed dynamically in code Next replaces at build time, but this
+ * module runs server-side only — `pages/api/observe/cell.js` documents that the lookup happens on
+ * the server precisely so the key is never shipped to a visitor — so the full environment is a
+ * real object here and the lookup is ordinary.
+ */
+function cellKey() {
+  for (const name of KEY_NAMES) {
+    const v = process.env[name];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/**
  * Look up a cell tower's position.
  *
  * `{mcc, mnc, lac, cellid}` identify a tower: country, network, area, cell. A handset knows all
@@ -68,8 +107,8 @@ export function sigmaFromRange(range) {
  * same reason: a failed source is a stated absence, not a stack trace in a route.
  */
 export async function locateCell({ mcc, mnc, lac, cellid }) {
-  const key = process.env.OPENCELLID_API_KEY;
-  if (!key) return { ok: false, reason: "no OPENCELLID_API_KEY configured" };
+  const key = cellKey();
+  if (!key) return { ok: false, reason: `no OpenCellID key configured (${KEY_NAMES.join(" or ")})` };
 
   for (const [name, v] of Object.entries({ mcc, mnc, lac, cellid })) {
     if (!Number.isFinite(Number(v))) {
