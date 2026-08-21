@@ -319,6 +319,36 @@ export const GATES = {
    * are, to within 200 km" is an *answer*. The gate remains for the rails that have no
    * ingestion path at all, where there is genuinely nothing to ask for.
    */
+  /**
+   * ⚠️ Split out of `no-observations`, and the split is the point.
+   *
+   * `feeds/[feed].js` deliberately does not 401 a signed-out visitor — a page should say what
+   * it needs rather than reject the reader. But it answered `no-observations`, which is the
+   * gate for *"you are signed in and have submitted no fix"*, so a signed-out reader was told
+   * to submit a GPS fix. ⚠️ Submitting one would then have failed at `requireSession` for a
+   * reason no page named.
+   *
+   * ⚠️ **It is reached two ways, and the wording has to serve both.** `feeds/[feed].js` answers
+   * it explicitly for a signed-out visitor; `RailPage` maps a bare 401 `reason:
+   * "unauthenticated"` onto it for every other route, because `requireSession` sends no
+   * `blockedBy` at all and the manifest fallback then rendered *"Nothing observed yet"* — a
+   * sentence that reads as an *answer* rather than an error, which is worse than an outage
+   * message. So the detail below names both rails and both nouns (position, record) rather
+   * than only the left rail's.
+   *
+   * ⭐ This is the third instance in this file of the same lesson — see `model-too-slow`,
+   * separated from `no-model` for exactly this, and `upstream-unreachable`, separated from
+   * `no-observations` below. **A gate is read as a diagnosis, so a gate naming the wrong
+   * precondition is worse than a vague one: it is actionable, and the action cannot work.**
+   * This one cost two debugging sessions, because it sent every diagnosis after position
+   * acquisition while the real state was *not signed in*.
+   */
+  "no-session": {
+    title: "Not signed in",
+    detail:
+      "Every page in both rails is drawn around one participant — a position is folded per participant, and a record is kept per participant. There is no session here, so there is nobody to draw them for. This says nothing about what you have observed or recorded: signing in is what these pages are waiting on.",
+    reference: "notes/33-position-fusion.md §5",
+  },
   "no-observations": {
     title: "Nothing observed yet",
     detail:

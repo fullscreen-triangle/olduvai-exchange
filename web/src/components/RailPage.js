@@ -74,9 +74,22 @@ export default function RailPage({ children }) {
 
   if (!entry) return null;
 
-  // Prefer the gate the server named: it knows which of several gates actually bit. The
-  // manifest's `blockedBy` is the fallback for when the BFF cannot be reached at all.
-  const gateKey = state.body?.blockedBy ?? entry.blockedBy;
+  /**
+   * Prefer the gate the server named: it knows which of several gates actually bit. The
+   * manifest's `blockedBy` is the fallback for when the BFF cannot be reached at all.
+   *
+   * ⚠️ **`unauthenticated` is mapped first, because the fallback actively lies about it.**
+   * `requireSession` answers 401 with `{ok: false, reason: "unauthenticated"}` and **no
+   * `blockedBy`** — so the chain below fell through to the manifest's value and rendered
+   * *"Nothing observed yet"* to a reader who was simply not signed in. ⭐ That is the same
+   * mislabel `feeds/[feed].js` made in its own signed-out branch, arrived at independently by
+   * a different mechanism, which is why it is corrected in both places: fixing only the feed
+   * would leave `observe/*` and `position` still saying it.
+   */
+  const gateKey =
+    state.body?.reason === "unauthenticated"
+      ? "no-session"
+      : state.body?.blockedBy ?? entry.blockedBy;
   const gate = GATES[gateKey];
 
   // ⭐ The same declaration, whichever state produced it. A blocked route puts it beside the

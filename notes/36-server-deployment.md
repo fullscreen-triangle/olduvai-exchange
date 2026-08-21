@@ -426,6 +426,30 @@ the compiled bundle contained the frozen literal `"production" !== "production"`
 production internally, so a rebuild under a different ambient value changed nothing either.
 Both were measured before concluding it.
 
+⚠️ **A correction to the paragraph above, measured 2026-08-21.** "Setting `NODE_ENV=development`
+in the systemd unit changed nothing" is true *of the session guard* and false in general, and the
+difference cost two further debugging sessions.
+
+`NODE_ENV` is read in **two** places with two different timings:
+
+| Read | When | Effect of the unit's value |
+|---|---|---|
+| `session.js`'s `NODE_ENV !== "production"` guard | **build time** — Next inlines it | none, as §6.2 says |
+| `session.js:156` `if (NODE_ENV === "production") parts.push("Secure")` | **request time** | ⭐ decisive |
+
+So with `Environment=NODE_ENV=development` the deployment served an **HTTPS origin issuing its
+session cookie without `Secure`**, and ran a development bundle. The unit is now
+`Environment=NODE_ENV=production`; verified live, the cookie is
+`Path=/; HttpOnly; SameSite=Lax; Max-Age=28800; Secure`.
+
+⚠️ **This lives only in `/etc/systemd/system/olduvai-web.service`, which is not in this repo.** A
+rebuilt server must set it again, and that is the whole reason it is written down here.
+
+⚠️ Stated precisely, because the temptation to over-claim is strong: this is **not** confirmed to
+be the cause of the original *"chrome would not let me log in, edge works"* report. Chrome does
+generally accept a non-`Secure` `SameSite=Lax` cookie over HTTPS. What is measured is only that
+the flag was missing, the bundle was a dev build, and both are now corrected.
+
 ⭐ So the guard now takes an explicit opt-in rather than being relaxed:
 
 ```

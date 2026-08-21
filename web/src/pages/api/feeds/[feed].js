@@ -266,12 +266,20 @@ async function locate(req, declaration, { centredOn }) {
   // ⚠️ Checked here rather than by `requireSession`, which would 401. A signed-out visitor
   // looking at the page should be told what the page needs, not rejected by it — and
   // `blockedBy` is the vocabulary `RailPage` already renders.
+  //
+  // ⭐ But it must be told the *right* thing. This branch previously answered
+  // `no-observations`, which is the gate for *"you are signed in and have submitted no fix"* —
+  // so a signed-out reader was told to submit a GPS fix, and submitting one would have failed
+  // for a reason the page never named. ⚠️ That single mislabel cost two debugging sessions:
+  // every diagnosis, mine included, chased position acquisition while the actual state was
+  // *not signed in*. A gate that names the wrong precondition is worse than no gate, because
+  // it is actionable and the action does not work.
   if (!readSession(req)) {
     return {
       ok: false,
       response: {
-        blockedBy: "no-observations",
-        note: `${centredOn} is drawn around the participant's folded position, and there is no session to fold one for.`,
+        blockedBy: "no-session",
+        note: `${centredOn} is drawn around the participant's folded position, and a position is folded per participant. There is no session here, so there is no one to fold one for. ⚠️ This is not a statement about your observations — signing in is what this page is waiting on.`,
         declaration,
       },
     };

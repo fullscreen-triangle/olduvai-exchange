@@ -55,6 +55,23 @@ export default function PositionBootstrap() {
         const r = await fetch("/api/position");
         const body = await r.json().catch(() => null);
         if (body?.data?.estimate?.rests_on_observation === true) return;
+
+        /**
+         * ⚠️ A 401 is not an empty log, and treating it as one is what made this component
+         * lie for two sessions.
+         *
+         * `requireSession` answers 401 with `ok: false` to every signed-out caller. The guard
+         * above tests only for `rests_on_observation === true`, which a 401 body also fails —
+         * so acquisition proceeded, prompted the browser for a location, posted it to a route
+         * that 401'd too, and reported *"we could not determine your position"*. ⭐ Every part
+         * of that is wrong: the position was fine, the browser did its job, and the actual
+         * state was *not signed in*. Worse, it burned the one-shot permission prompt
+         * (`attempted.current`) on a request that could never succeed.
+         */
+        if (r.status === 401) {
+          setOutcome({ kind: "unauthenticated" });
+          return;
+        }
       } catch {
         // A position route that did not answer is not a reason to skip acquisition — the fix
         // still needs recording, and the POST will report its own failure.
@@ -79,6 +96,13 @@ export default function PositionBootstrap() {
         const net = await fetch("/api/observe/network", { method: "POST" });
         const body = await net.json().catch(() => null);
         if (cancelled) return;
+        // ⚠️ Checked before the success branch: the session can expire between the read above
+        // and this POST, and reporting that as a failed acquisition would blame the browser
+        // for a cookie.
+        if (net.status === 401) {
+          setOutcome({ kind: "unauthenticated" });
+          return;
+        }
         if (net.ok && body?.network) {
           result = {
             ok: true,
@@ -137,6 +161,25 @@ export default function PositionBootstrap() {
     return (
       <Banner tone="ok">
         Position recorded to about {Math.round(outcome.sigma_m)} m. Context pages are centred on it.
+      </Banner>
+    );
+  }
+
+  /**
+   * ⚠️ Stated separately from `failed`, because it is not a failure of anything the participant
+   * did and the remedy is completely different.
+   *
+   * ⭐ Silence here is what produced the standing complaint that nothing preloads: every rail
+   * page fetched, every fetch 401'd, and each page rendered a gate about observations while
+   * this component said nothing at all. Naming it once, at the top of every page, is what
+   * turns twelve confusing empty tabs into one sentence.
+   */
+  if (outcome?.kind === "unauthenticated") {
+    return (
+      <Banner tone="warn">
+        You are not signed in, so no position can be recorded and the context pages have nothing
+        to centre on. ⚠️ This is not a fault in your browser or its location permission — sign
+        in and these pages fill in on their own.
       </Banner>
     );
   }
